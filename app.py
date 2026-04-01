@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import os
 
-st.set_page_config(page_title="港股狙擊手 V3 - 宏觀修復版", layout="wide")
+st.set_page_config(page_title="港股狙擊手 V4 - 終極穩定版", layout="wide")
 
 # --- 1. 名單讀取 ---
 def load_stocks():
@@ -15,26 +15,31 @@ def load_stocks():
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 stocks = [line.split('#')[0].strip().replace('"', '').replace("'", "") for line in f if line.strip()]
-            return [s for s in stocks if s.endswith('.HK')]
+            valid_stocks = [s for s in stocks if s.endswith('.HK')]
+            return valid_stocks if valid_stocks else default_stocks
         except:
             return default_stocks
     return default_stocks
 
 TARGET_STOCKS = load_stocks()
+if not TARGET_STOCKS:
+    TARGET_STOCKS = ["0700.HK"]
 
-# --- 2. 工具函數 ---
-# 🌟 新增：專門處理 yfinance 新版雙層標籤的下載函數
+# --- 2. 工具函數 (🌟 終極修復版) ---
 def get_stock_data(ticker, period="6mo"):
     try:
-        df = yf.download(ticker, period=period, interval="1d", progress=False)
+        # 🌟 核心修復：放棄 yf.download，改用 yf.Ticker().history()
+        # 這樣可以 100% 避開 yfinance 最近的雙層標籤 (MultiIndex) 錯誤
+        df = yf.Ticker(ticker).history(period=period)
         if df.empty:
-            return df
-        # 關鍵修復：判斷如果是雙層標籤 (MultiIndex)，就將其「壓平」提取第一層
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+            return pd.DataFrame()
+        
+        # 清除時區資訊，避免後續處理出錯
+        if df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
+            
         return df
-    except Exception as e:
-        st.error(f"下載 {ticker} 數據時出錯: {e}")
+    except Exception:
         return pd.DataFrame()
 
 def calculate_rsi(series, period=14):
@@ -62,7 +67,7 @@ def show_chart(ticker, df, height=700):
     st.plotly_chart(fig, use_container_width=True)
 
 # --- 3. 網頁佈局 ---
-st.title("🏹 港股狙擊手 V3 - 專業宏觀儀表板")
+st.title("🏹 港股狙擊手 V4 - 終極穩定版")
 tab1, tab2, tab3 = st.tabs(["🌍 大市導航", "🎯 策略掃描", "🔍 個股分析"])
 
 # ================= 頁籤 1：大市導航 =================
@@ -71,7 +76,6 @@ with tab1:
     col1, col2 = st.columns(2)
     
     with st.spinner("正在獲取大盤數據..."):
-        # 👉 將 yf.download 替換為我們的 get_stock_data 函數
         hsi = get_stock_data("^HSI", period="6mo")
         vix = get_stock_data("^VIX", period="6mo")
 
@@ -105,7 +109,7 @@ with tab1:
                 fig_vix.update_layout(height=300, title="VIX 走勢 (越高越危險)", margin=dict(l=0,r=0,t=30,b=0))
                 st.plotly_chart(fig_vix, use_container_width=True)
         else:
-            st.error("無法取得恆指或 VIX 數據，請檢查網路連線。")
+            st.error("無法取得恆指或 VIX 數據，這可能是連線問題，請稍後再試。")
 
 # ================= 頁籤 2：策略掃描 =================
 with tab2:
@@ -113,36 +117,48 @@ with tab2:
     if st.button('🔥 開始掃描', use_container_width=True):
         progress = st.progress(0)
         hits = []
+        status_text = st.empty() # 新增一個文字區塊顯示掃描進度
+        
         for i, s in enumerate(TARGET_STOCKS):
             progress.progress((i + 1) / len(TARGET_STOCKS))
-            # 👉 將 yf.download 替換為我們的 get_stock_data 函數
+            status_text.text(f"正在分析：{s} ...")
+            
             df = get_stock_data(s, period="4mo")
             if df.empty or len(df) < 30: continue
             
-            df['MA10'] = df['Close'].rolling(10).mean()
-            df['MA20'] = df['Close'].rolling(20).mean()
-            df['RSI'] = calculate_rsi(df['Close'])
-            
-            curr = df.iloc[-1]
-            vol_ratio = float(curr['Volume']) / float(df['Volume'].tail(5).mean())
-            
-            if curr['Close'] > curr['MA10'] and curr['Close'] > curr['MA20'] and vol_ratio >= 1.5 and 50 <= curr['RSI'] <= 72:
-                hits.append({"代碼": s, "現價": round(float(curr['Close']), 2), "量比": round(float(vol_ratio), 2), "RSI": round(float(curr['RSI']), 1)})
-                st.success(f"🎯 發現目標：{s}")
-                show_chart(s, df, height=500)
+            try:
+                df['MA10'] = df['Close'].rolling(10).mean()
+                df['MA20'] = df['Close'].rolling(20).mean()
+                df['RSI'] = calculate_rsi(df['Close'])
                 
+                curr = df.iloc[-1]
+                avg_vol = df['Volume'].tail(5).mean()
+                if avg_vol == 0: continue # 避免除以零的錯誤
+                
+                vol_ratio = float(curr['Volume']) / float(avg_vol)
+                
+                if curr['Close'] > curr['MA10'] and curr['Close'] > curr['MA20'] and vol_ratio >= 1.5 and 50 <= curr['RSI'] <= 72:
+                    hits.append({"代碼": s, "現價": round(float(curr['Close']), 2), "量比": round(float(vol_ratio), 2), "RSI": round(float(curr['RSI']), 1)})
+                    st.success(f"🎯 發現目標：{s}")
+                    show_chart(s, df, height=500)
+            except Exception:
+                continue
+                
+        status_text.text("掃描完成！")
+            
         if hits:
             st.subheader("📋 今日清單")
             st.dataframe(pd.DataFrame(hits), use_container_width=True, hide_index=True)
+        else:
+            st.warning("目前沒有符合「強勢狙擊」條件的股票。（代表現在市場較冷，或是沒有個股出現爆發信號，適合觀望！）")
 
 # ================= 頁籤 3：個股分析 =================
 with tab3:
     search = st.text_input("輸入代碼 (例如 9988.HK)", "0700.HK").upper()
     if st.button("查看數據", key="search_btn"):
         with st.spinner(f"正在分析 {search}..."):
-            # 👉 將 yf.download 替換為我們的 get_stock_data 函數
             df_s = get_stock_data(search, period="6mo")
             if not df_s.empty:
                 show_chart(search, df_s)
             else:
-                st.error("找不到該股票數據。")
+                st.error("找不到該股票數據，請確認代碼是否正確。")
