@@ -31,7 +31,7 @@ def show_chart(ticker, df, curr_p, ma20):
 st.title("港股短線選股器")
 st.info(f"當前邏輯：股價 > 20MA and 成交量比平均放大 {FIXED_VOL_RATIO} 倍")
 
-if st.button('🎯 立即掃描全市場強勢股', use_container_width=True):
+if st.button('Start', use_container_width=True):
     found_any = False
     progress_bar = st.progress(0)
     
