@@ -68,7 +68,7 @@ def show_chart(ticker, df, height=700):
 
 # --- 3. 網頁佈局 ---
 st.title("🏹 港股狙擊手 V4 - 終極穩定版")
-tab1, tab2, tab3 = st.tabs(["🌍 大市導航", "🎯 策略掃描", "🔍 個股分析"])
+tab1, tab2, tab3 = st.tabs(["🌍 大市", "🎯 auto", "🔍 個股"])
 
 # ================= 頁籤 1：大市導航 =================
 with tab1:
