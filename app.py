@@ -3,10 +3,10 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="港股全能掃描器", layout="wide")
+st.set_page_config(page_title="港股短線選股器", layout="wide")
 
 # --- 側邊欄設定 ---
-st.sidebar.title("🛠 控制面板")
+st.sidebar.title("Dont ask why i use this function")
 scan_mode = st.sidebar.selectbox("選擇掃描範圍", ["大型藍籌 (HSI)", "科技股 (HSTECH)", "自定義名單"])
 min_vol_ratio = st.sidebar.slider("成交量放大倍數 (量比)", 1.0, 3.0, 1.5, 0.1)
 
@@ -17,7 +17,7 @@ hstech_stocks = ["0020.HK", "0182.HK", "0241.HK", "0268.HK", "0285.HK", "0700.HK
 target_stocks = hstech_stocks if scan_mode == "科技股 (HSTECH)" else hsi_stocks
 
 # --- 主畫面 ---
-st.title("🏹 港股短線獵人")
+st.title("🏹 港股短線選股器")
 st.write(f"目前掃描範圍：{scan_mode} (共 {len(target_stocks)} 隻)")
 
 def show_chart(ticker, df):
