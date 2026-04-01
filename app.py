@@ -1,25 +1,38 @@
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import os
+
+# 設定網頁標題
+st.set_page_config(page_title="港股獵人 - 終極完全體", layout="wide")
+
+# --- 1. 名單讀取邏輯 (修正版) ---
 def load_stocks():
     file_path = 'stocks.txt'
+    # 預設保底名單，萬一檔案讀取失敗時使用
     default_stocks = ["0700.HK", "3690.HK", "9988.HK", "1810.HK", "1211.HK"]
     
     if os.path.exists(file_path):
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
-                stocks = [line.split('#')[0].strip() for line in f if line.strip()]
-            if stocks:
-                return stocks
-            else:
-                st.warning("⚠️ stocks.txt 是空的，使用預設名單。")
-                return default_stocks
+                # 讀取每一行，過濾掉 # 後的註解、空格，並確保不是空行
+                stocks = []
+                for line in f:
+                    clean_line = line.split('#')[0].strip()
+                    if clean_line:
+                        stocks.append(clean_line)
+                # 如果讀出來是空的，就回傳保底名單
+                return stocks if stocks else default_stocks
         except Exception as e:
-            st.error(f"❌ 讀取失敗: {e}")
+            st.error(f"讀取 stocks.txt 時發生錯誤: {e}")
             return default_stocks
     else:
-        # 在網頁上顯示提示，幫你確認檔案在哪
-        st.error(f"🏠 找不到檔案！請確保 '{file_path}' 與 app.py 放在一起。")
-        st.info(f"目前路徑下的檔案有: {os.listdir('.')}")
         return default_stocks
 
+# 執行讀取
+TARGET_STOCKS = load_stocks()
 
 # --- 2. 技術指標計算 ---
 def calculate_rsi(series, period=14):
