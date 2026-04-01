@@ -12,8 +12,7 @@ TARGET_STOCKS = [
     "2318.HK", "3988.HK", "1398.HK", "0939.HK", "0388.HK", #bank
     "0883.HK", "0857.HK", "0386.HK", #fuel
     "2269.HK", "1093.HK", "0241.HK", "2359.HK", #bio/health
-    "1109.HK", "0688.HK", "0960.HK", "0001.HK", #地產
-    "0388.HK" #other
+    "1109.HK", "0688.HK", "0960.HK", "0001.HK" #地產
 ]
 
 FIXED_VOL_RATIO = 1.2
