@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import os
 
-st.set_page_config(page_title="港股狙擊手 V4 - 終極穩定版", layout="wide")
+st.set_page_config(page_title="V4", layout="wide")
 
 # --- 1. 名單讀取 ---
 def load_stocks():
@@ -106,10 +106,10 @@ with tab1:
                 
                 fig_vix = go.Figure()
                 fig_vix.add_trace(go.Scatter(x=vix.index, y=vix['Close'], name='VIX', line=dict(color='red')))
-                fig_vix.update_layout(height=300, title="VIX 走勢 (越高越危險)", margin=dict(l=0,r=0,t=30,b=0))
+                fig_vix.update_layout(height=300, title="VIX 走勢", margin=dict(l=0,r=0,t=30,b=0))
                 st.plotly_chart(fig_vix, use_container_width=True)
         else:
-            st.error("無法取得恆指或 VIX 數據，這可能是連線問題，請稍後再試。")
+            st.error("無法取得恆指或 VIX 數據")
 
 # ================= 頁籤 2：策略掃描 =================
 with tab2:
