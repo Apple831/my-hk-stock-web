@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="港股獵人 - 全能版", layout="wide")
+st.set_page_config(page_title="港股獵人 - 終極完全體", layout="wide")
 
 TARGET_STOCKS = [
     "0700.HK", "3690.HK", "9988.HK", "1810.HK", "1024.HK", "9888.HK", "9618.HK", "9999.HK",
@@ -24,34 +24,42 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
+# 升級版：包含 K線、成交量、RSI 的三層圖表
 def show_chart(ticker, df, curr_p):
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                        vertical_spacing=0.05, row_heights=[0.7, 0.3])
+    # 建立 3 個子圖，高度比例為 60%、20%、20%
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
+                        vertical_spacing=0.03, row_heights=[0.6, 0.2, 0.2])
 
-    # K線與均線
+    # 1. K線與均線 (第一層)
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='20MA', line=dict(color='orange', width=2)), row=1, col=1)
     
-    # 自動壓力與支撐
+    # 壓力與支撐
     recent_60_days = df.tail(60)
     res_level = recent_60_days['High'].max()
     sup_level = recent_60_days['Low'].min()
+    fig.add_hline(y=res_level, line_dash="dash", line_color="red", annotation_text=f"壓力: {res_level:.2f}", row=1, col=1)
+    fig.add_hline(y=sup_level, line_dash="dash", line_color="green", annotation_text=f"支撐: {sup_level:.2f}", row=1, col=1)
+
+    # 2. 成交量柱狀圖 (第二層)
+    # 亞洲股市習慣：收盤 >= 開盤 為紅 (漲)，收盤 < 開盤 為綠 (跌)
+    colors = ['red' if row['Close'] >= row['Open'] else 'green' for index, row in df.iterrows()]
+    fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='成交量', marker_color=colors), row=2, col=1)
+
+    # 3. RSI 指標 (第三層)
+    fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name='RSI (14)', line=dict(color='purple', width=2)), row=3, col=1)
+    fig.add_hline(y=70, line_dash="dot", line_color="red", row=3, col=1)
+    fig.add_hline(y=30, line_dash="dot", line_color="green", row=3, col=1)
+
+    # 隱藏底部的時間滑桿，確保畫面乾淨，並拉高整體圖表高度以容納三個指標
+    fig.update_xaxes(rangeslider_visible=False)
+    fig.update_layout(height=700, margin=dict(l=10, r=10, t=30, b=10), showlegend=False)
     
-    fig.add_hline(y=res_level, line_dash="dash", line_color="red", annotation_text=f"近期壓力: {res_level:.2f}", row=1, col=1)
-    fig.add_hline(y=sup_level, line_dash="dash", line_color="green", annotation_text=f"近期支撐: {sup_level:.2f}", row=1, col=1)
-
-    # RSI
-    fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name='RSI (14)', line=dict(color='purple', width=2)), row=2, col=1)
-    fig.add_hline(y=70, line_dash="dot", line_color="red", row=2, col=1)
-    fig.add_hline(y=30, line_dash="dot", line_color="green", row=2, col=1)
-
-    fig.update_layout(xaxis_rangeslider_visible=False, xaxis2_rangeslider_visible=False, height=550, margin=dict(l=10, r=10, t=30, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
 
-st.title("🏹 港股短線獵人 (全能版)")
+st.title("🏹 港股短線獵人 (終極版)")
 
-# 建立兩個大分頁 (Tabs)
 tab1, tab2 = st.tabs(["🎯 強勢股自動掃描", "🔍 個股深度搜尋"])
 
 # ================= 頁籤 1：自動掃描 =================
@@ -96,7 +104,7 @@ with tab1:
             st.dataframe(report_df, use_container_width=True, hide_index=True)
             
             st.write("---")
-            st.header("📈 詳細技術線圖")
+            st.header("📈 詳細技術線圖 (含成交量與 RSI)")
             for s in report_df["股票代碼"]:
                 st.subheader(f"🔥 {s}")
                 show_chart(s, all_data[s]["df"], all_data[s]["curr_p"])
@@ -107,13 +115,11 @@ with tab1:
 # ================= 頁籤 2：個股搜尋 =================
 with tab2:
     st.subheader("輸入任何港股代碼，立即查看技術面")
-    
-    # 搜尋框與按鈕排在同一列
     col_input, col_btn = st.columns([3, 1])
     with col_input:
-        search_ticker = st.text_input("請輸入股票代碼 (需加上 .HK，例如 0700.HK, 9988.HK)", value="0700.HK")
+        search_ticker = st.text_input("請輸入股票代碼 (需加上 .HK，例如 0700.HK)", value="0700.HK")
     with col_btn:
-        st.write("") # 排版用，讓按鈕往下對齊輸入框
+        st.write("") 
         st.write("")
         search_btn = st.button("🔍 查詢走勢", use_container_width=True)
 
@@ -123,7 +129,7 @@ with tab2:
                 df_search = yf.download(search_ticker.upper(), period="4mo", interval="1d", multi_level_index=False, progress=False)
                 
                 if df_search.empty or len(df_search) < 60:
-                    st.error(f"❌ 找不到 {search_ticker} 的數據，請確認代碼是否正確 (例如 騰訊請輸入 0700.HK)。")
+                    st.error(f"❌ 找不到 {search_ticker} 的數據，請確認代碼是否正確。")
                 else:
                     df_search['MA20'] = df_search['Close'].rolling(20).mean()
                     df_search['RSI'] = calculate_rsi(df_search['Close'])
@@ -132,21 +138,16 @@ with tab2:
                     ma20 = float(df_search['MA20'].iloc[-1])
                     curr_rsi = float(df_search['RSI'].iloc[-1])
                     
-                    # 顯示頂部數據儀表板
                     st.write("---")
                     metric_col1, metric_col2, metric_col3 = st.columns(3)
                     metric_col1.metric("📌 最新收盤價", f"${curr_p:.2f}")
-                    
-                    # 判斷趨勢給予不同顏色提示
                     ma_status = "🟢 位於均線之上" if curr_p > ma20 else "🔴 跌破均線"
                     metric_col2.metric("📈 20日均線 (MA20)", f"${ma20:.2f}", ma_status)
-                    
                     rsi_status = "🔥 超買警戒" if curr_rsi >= 70 else ("🧊 超賣區間" if curr_rsi <= 30 else "穩健區間")
                     metric_col3.metric("📊 RSI (14)", f"{curr_rsi:.2f}", rsi_status)
                     
-                    # 顯示圖表
                     st.subheader(f"📊 {search_ticker.upper()} 技術線圖")
                     show_chart(search_ticker.upper(), df_search, curr_p)
                     
             except Exception as e:
-                st.error(f"❌ 發生錯誤: {e}，請稍後再試或檢查代碼格式。")
+                st.error(f"❌ 發生錯誤: {e}，請稍後再試。")
