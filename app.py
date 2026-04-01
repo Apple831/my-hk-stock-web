@@ -1,41 +1,40 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import plotly.graph_objects as go
 
-st.title("港股🚀")
+st.set_page_config(page_title="港股短線獵人", layout="wide")
+st.title("🏹 港股短線選股器 (Pro版)")
 
-# 你可以隨時在這裡增加更多港股代碼
-stocks = ["0700.HK", "3690.HK", "9988.HK", "1211.HK", "2318.HK", "0388.HK", "1810.HK"]
+# 股票池
+stocks = ["0700.HK", "3690.HK", "9988.HK", "1211.HK", "2318.HK", "0388.HK", "1810.HK", "1024.HK", "9888.HK"]
 
-def check_strategy(ticker):
-    # 關鍵修正：加入 multi_level_index=False 確保資料格式正確
-    df = yf.download(ticker, period="1mo", interval="1d", multi_level_index=False)
-    
-    # 檢查是否有抓到資料
-    if df.empty or len(df) < 20: 
-        return False
-    
-    # 計算 20 日均線
-    df['MA20'] = df['Close'].rolling(window=20).mean()
-    
-    # 取得最新的數值，並強制轉為數字 (float) 避免報錯
-    current_price = float(df['Close'].iloc[-1])
-    last_volume = float(df['Volume'].iloc[-1])
-    avg_volume = float(df['Volume'].iloc[-2: -6: -1].mean()) # 取前 5 天平均成交量
-    ma20_val = float(df['MA20'].iloc[-1])
+def show_chart(ticker, df):
+    fig = go.Figure(data=[go.Candlestick(x=df.index,
+                open=df['Open'], high=df['High'],
+                low=df['Low'], close=df['Close'], name='K線')])
+    fig.add_trace(go.Scatter(x=df.index, y=df['Close'].rolling(20).mean(), name='20MA', line=dict(color='orange')))
+    fig.update_layout(title=f"{ticker} 走勢圖", xaxis_rangeslider_visible=False, height=400)
+    st.plotly_chart(fig, use_container_width=True)
 
-    # 策略邏輯：價格在均線上 + 成交量是平均的 1.5 倍
-    if current_price > ma20_val and last_volume > (avg_volume * 1.5):
-        return True
-    return False
-
-if st.button('開始掃描股票'):
-    with st.spinner('正在分析港股數據...'):
-        for s in stocks:
-            try:
-                if check_strategy(s):
-                    st.success(f"✅ {s} 符合爆發條件！")
+if st.button('🎯 開始全自動掃描'):
+    cols = st.columns(2) # 分成兩列顯示，看起來更專業
+    for i, s in enumerate(stocks):
+        with st.spinner(f'正在分析 {s}...'):
+            df = yf.download(s, period="3mo", interval="1d", multi_level_index=False)
+            if df.empty: continue
+            
+            # 策略判斷
+            ma20 = df['Close'].rolling(20).mean().iloc[-1]
+            curr_p = float(df['Close'].iloc[-1])
+            vol_ratio = float(df['Volume'].iloc[-1]) / float(df['Volume'].tail(5).mean())
+            
+            with cols[i % 2]: # 交替放在左/右兩欄
+                st.subheader(f"股票: {s}")
+                if curr_p > ma20 and vol_ratio > 1.2:
+                    st.success(f"🔥 訊號觸發！成交量放大 {vol_ratio:.2f} 倍")
                 else:
-                    st.info(f"⚪ {s} 尚未觸發")
-            except Exception as e:
-                st.error(f"❌ {s} 數據抓取失敗: {e}")
+                    st.info(f"😴 趨勢盤整中 (量比: {vol_ratio:.2f})")
+                
+                show_chart(s, df) # 秀出圖表
+                st.write("---")
