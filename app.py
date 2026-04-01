@@ -17,7 +17,7 @@ def show_chart(ticker, df):
     fig.update_layout(title=f"{ticker} 走勢圖", xaxis_rangeslider_visible=False, height=400)
     st.plotly_chart(fig, use_container_width=True)
 
-if st.button('🎯 開始全自動掃描'):
+if st.button('Start'):
     cols = st.columns(2) # 分成兩列顯示，看起來更專業
     for i, s in enumerate(stocks):
         with st.spinner(f'正在分析 {s}...'):
