@@ -10,11 +10,15 @@ st.set_page_config(page_title="港股獵人 - 終極完全體", layout="wide")
 def load_stocks():
     file_path = 'stocks.txt'
     if os.path.exists(file_path):
-        with open(file_path, 'r') as f:
-            # 讀取每一行，去掉空格和換行，並過濾掉空行
+        with open(file_path, 'r', encoding='utf-8') as f:
             stocks = [line.strip() for line in f if line.strip()]
         return stocks
+    else:
+        # error tp
+        return ["0700.HK", "9988.HK"]
+
 TARGET_STOCKS = load_stocks()
+
 
 FIXED_VOL_RATIO = 1.2
 
