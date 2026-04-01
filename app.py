@@ -6,38 +6,14 @@ from plotly.subplots import make_subplots
 
 st.set_page_config(page_title="港股獵人 - 終極完全體", layout="wide")
 
-TARGET_STOCKS = [
-    # 科技
-    "0700.HK", "3690.HK", "9988.HK", "1810.HK", "1024.HK", "9888.HK", "9618.HK", "9999.HK", "0981.HK", "1347.HK", 
-    
-    # 車
-    "1211.HK", "0175.HK", "2333.HK", "2015.HK", "9869.HK", 
-    
-    # 銀行
-    "2318.HK", "3988.HK", "1398.HK", "0939.HK", "0388.HK", 
-    
-    # fuel
-    "0883.HK", "0857.HK", "0386.HK", "1088.HK", 
-    
-    # bio/health
-    "2269.HK", "1093.HK", "0241.HK", "2359.HK", 
-    
-    # 地產
-    "1109.HK", "0688.HK", "0960.HK", "0001.HK",
-    
-    # random
-    "2020.HK", "2331.HK", "6862.HK", "9633.HK", 
-    
-    # gambling
-    "1928.HK", "0027.HK", 
-    
-    # 電訊
-    "0941.HK", "0728.HK", 
-    
-    # Shipping
-    "1919.HK"  
-]
-
+def load_stocks():
+    file_path = 'stocks.txt'
+    if os.path.exists(file_path):
+        with open(file_path, 'r') as f:
+            # 讀取每一行，去掉空格和換行，並過濾掉空行
+            stocks = [line.strip() for line in f if line.strip()]
+        return stocks
+TARGET_STOCKS = load_stocks()
 
 FIXED_VOL_RATIO = 1.2
 
