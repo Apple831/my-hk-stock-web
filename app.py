@@ -3,8 +3,8 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="港股短線獵人", layout="wide")
-st.title("🏹 港股短線選股器 (Pro版)")
+st.set_page_config(page_title="港股短線選股器", layout="wide")
+st.title("This will lose you money.. YES FR")
 
 # 股票池
 stocks = ["0700.HK", "3690.HK", "9988.HK", "1211.HK", "2318.HK", "0388.HK", "1810.HK", "1024.HK", "9888.HK"]
