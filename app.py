@@ -3,7 +3,7 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="港股獵人 - 極簡版", layout="wide")
+st.set_page_config(page_title="港股短線選股器", layout="wide")
 
 # 固定掃描名單（恆生科技指數 + 核心藍籌，共約 40 隻最活躍股票）
 TARGET_STOCKS = [
@@ -28,8 +28,8 @@ def show_chart(ticker, df, curr_p, ma20):
     fig.update_layout(xaxis_rangeslider_visible=False, height=400, margin=dict(l=10, r=10, t=30, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
-st.title("🏹 港股短線自動獵人")
-st.info(f"當前邏輯：股價 > 20MA 且 成交量比平均放大 {FIXED_VOL_RATIO} 倍")
+st.title("港股短線選股器")
+st.info(f"當前邏輯：股價 > 20MA and 成交量比平均放大 {FIXED_VOL_RATIO} 倍")
 
 if st.button('🎯 立即掃描全市場強勢股', use_container_width=True):
     found_any = False
