@@ -15,7 +15,7 @@ def load_stocks():
         return stocks
     else:
         # error tp
-        return ["0700.HK", "9988.HK"]
+        st.set_page_config(page_title="error", layout="wide")
 
 TARGET_STOCKS = load_stocks()
 
