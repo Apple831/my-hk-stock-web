@@ -2,9 +2,9 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots # 引入子圖表功能
+from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="港股獵人 - 終極版", layout="wide")
+st.set_page_config(page_title="港股獵人 - 全能版", layout="wide")
 
 TARGET_STOCKS = [
     "0700.HK", "3690.HK", "9988.HK", "1810.HK", "1024.HK", "9888.HK", "9618.HK", "9999.HK",
@@ -17,7 +17,6 @@ TARGET_STOCKS = [
 
 FIXED_VOL_RATIO = 1.2
 
-# 1. 計算 RSI 的專屬函數
 def calculate_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -25,86 +24,129 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# 2. 繪製包含 K線、均線、支撐壓力、RSI 的雙層圖表
 def show_chart(ticker, df, curr_p):
-    # 建立上下兩層的圖表架構 (K線佔 70%，RSI佔 30%)
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
                         vertical_spacing=0.05, row_heights=[0.7, 0.3])
 
-    # --- 上半部：K 線與 20MA ---
+    # K線與均線
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='20MA', line=dict(color='orange', width=2)), row=1, col=1)
     
-    # 計算並畫出「自動壓力與支撐線」 (抓取最近 60 天的最高與最低)
+    # 自動壓力與支撐
     recent_60_days = df.tail(60)
     res_level = recent_60_days['High'].max()
     sup_level = recent_60_days['Low'].min()
     
-    # 畫壓力線 (紅虛線) 與 支撐線 (綠虛線)
     fig.add_hline(y=res_level, line_dash="dash", line_color="red", annotation_text=f"近期壓力: {res_level:.2f}", row=1, col=1)
     fig.add_hline(y=sup_level, line_dash="dash", line_color="green", annotation_text=f"近期支撐: {sup_level:.2f}", row=1, col=1)
 
-    # --- 下半部：RSI 指標 ---
+    # RSI
     fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name='RSI (14)', line=dict(color='purple', width=2)), row=2, col=1)
-    # 畫 RSI 的超買超賣警戒線
     fig.add_hline(y=70, line_dash="dot", line_color="red", row=2, col=1)
     fig.add_hline(y=30, line_dash="dot", line_color="green", row=2, col=1)
 
-    # 隱藏下方時間軸拉桿，調整整體高度
     fig.update_layout(xaxis_rangeslider_visible=False, xaxis2_rangeslider_visible=False, height=550, margin=dict(l=10, r=10, t=30, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
 
-st.title("🏹 港股短線獵人 (終極全能版)")
+st.title("🏹 港股短線獵人 (全能版)")
 
-if st.button('🎯 立即掃描全市場強勢股', use_container_width=True):
-    progress_bar = st.progress(0)
-    hit_list = [] 
-    all_data = {} 
+# 建立兩個大分頁 (Tabs)
+tab1, tab2 = st.tabs(["🎯 強勢股自動掃描", "🔍 個股深度搜尋"])
 
-    for i, s in enumerate(TARGET_STOCKS):
-        progress_bar.progress((i + 1) / len(TARGET_STOCKS))
-        try:
-            df = yf.download(s, period="4mo", interval="1d", multi_level_index=False, progress=False)
-            if df.empty or len(df) < 60: continue # 確保有足夠數據算 60天高低點
-            
-            # 計算所有技術指標
-            df['MA20'] = df['Close'].rolling(20).mean()
-            df['RSI'] = calculate_rsi(df['Close'])
-            
-            curr_p = float(df['Close'].iloc[-1])
-            ma20 = float(df['MA20'].iloc[-1])
-            curr_rsi = float(df['RSI'].iloc[-1])
-            vol_ratio = float(df['Volume'].iloc[-1]) / float(df['Volume'].tail(5).mean())
-            change_pct = ((curr_p - float(df['Close'].iloc[-2])) / float(df['Close'].iloc[-2])) * 100
-            
-            # 策略過濾：只要價漲量增就抓出來
-            if curr_p > ma20 and vol_ratio >= FIXED_VOL_RATIO:
-                hit_list.append({
-                    "股票代碼": s,
-                    "現價": round(curr_p, 2),
-                    "今日漲幅(%)": round(change_pct, 2),
-                    "成交量比": round(vol_ratio, 2),
-                    "RSI (14)": round(curr_rsi, 2) # 將 RSI 加入排行榜
-                })
-                all_data[s] = {"df": df, "curr_p": curr_p}
-        except:
-            continue
+# ================= 頁籤 1：自動掃描 =================
+with tab1:
+    st.info("自動過濾出「股價站在 20MA 之上」且「成交量放大 1.2 倍」的強勢股。")
+    if st.button('🎯 立即掃描全市場強勢股', use_container_width=True):
+        progress_bar = st.progress(0)
+        hit_list = [] 
+        all_data = {} 
 
-    if hit_list:
-        st.balloons()
-        st.header("📊 今日強勢股排行榜")
-        
-        # 顯示包含 RSI 的表格
-        report_df = pd.DataFrame(hit_list).sort_values(by="成交量比", ascending=False)
-        st.dataframe(report_df, use_container_width=True, hide_index=True)
-        
-        st.write("---")
-        st.header("📈 詳細技術線圖 (含壓力支撐與 RSI)")
-        
-        for s in report_df["股票代碼"]:
-            st.subheader(f"🔥 {s}")
-            show_chart(s, all_data[s]["df"], all_data[s]["curr_p"])
+        for i, s in enumerate(TARGET_STOCKS):
+            progress_bar.progress((i + 1) / len(TARGET_STOCKS))
+            try:
+                df = yf.download(s, period="4mo", interval="1d", multi_level_index=False, progress=False)
+                if df.empty or len(df) < 60: continue 
+                
+                df['MA20'] = df['Close'].rolling(20).mean()
+                df['RSI'] = calculate_rsi(df['Close'])
+                
+                curr_p = float(df['Close'].iloc[-1])
+                ma20 = float(df['MA20'].iloc[-1])
+                curr_rsi = float(df['RSI'].iloc[-1])
+                vol_ratio = float(df['Volume'].iloc[-1]) / float(df['Volume'].tail(5).mean())
+                change_pct = ((curr_p - float(df['Close'].iloc[-2])) / float(df['Close'].iloc[-2])) * 100
+                
+                if curr_p > ma20 and vol_ratio >= FIXED_VOL_RATIO:
+                    hit_list.append({
+                        "股票代碼": s,
+                        "現價": round(curr_p, 2),
+                        "今日漲幅(%)": round(change_pct, 2),
+                        "成交量比": round(vol_ratio, 2),
+                        "RSI (14)": round(curr_rsi, 2)
+                    })
+                    all_data[s] = {"df": df, "curr_p": curr_p}
+            except:
+                continue
+
+        if hit_list:
+            st.balloons()
+            st.header("📊 今日強勢股排行榜")
+            report_df = pd.DataFrame(hit_list).sort_values(by="成交量比", ascending=False)
+            st.dataframe(report_df, use_container_width=True, hide_index=True)
+            
             st.write("---")
-    else:
-        st.warning("目前市場沒有符合條件的強勢股。")
+            st.header("📈 詳細技術線圖")
+            for s in report_df["股票代碼"]:
+                st.subheader(f"🔥 {s}")
+                show_chart(s, all_data[s]["df"], all_data[s]["curr_p"])
+                st.write("---")
+        else:
+            st.warning("目前市場沒有符合條件的強勢股。")
+
+# ================= 頁籤 2：個股搜尋 =================
+with tab2:
+    st.subheader("輸入任何港股代碼，立即查看技術面")
+    
+    # 搜尋框與按鈕排在同一列
+    col_input, col_btn = st.columns([3, 1])
+    with col_input:
+        search_ticker = st.text_input("請輸入股票代碼 (需加上 .HK，例如 0700.HK, 9988.HK)", value="0700.HK")
+    with col_btn:
+        st.write("") # 排版用，讓按鈕往下對齊輸入框
+        st.write("")
+        search_btn = st.button("🔍 查詢走勢", use_container_width=True)
+
+    if search_btn:
+        with st.spinner(f"正在分析 {search_ticker} 的數據..."):
+            try:
+                df_search = yf.download(search_ticker.upper(), period="4mo", interval="1d", multi_level_index=False, progress=False)
+                
+                if df_search.empty or len(df_search) < 60:
+                    st.error(f"❌ 找不到 {search_ticker} 的數據，請確認代碼是否正確 (例如 騰訊請輸入 0700.HK)。")
+                else:
+                    df_search['MA20'] = df_search['Close'].rolling(20).mean()
+                    df_search['RSI'] = calculate_rsi(df_search['Close'])
+                    
+                    curr_p = float(df_search['Close'].iloc[-1])
+                    ma20 = float(df_search['MA20'].iloc[-1])
+                    curr_rsi = float(df_search['RSI'].iloc[-1])
+                    
+                    # 顯示頂部數據儀表板
+                    st.write("---")
+                    metric_col1, metric_col2, metric_col3 = st.columns(3)
+                    metric_col1.metric("📌 最新收盤價", f"${curr_p:.2f}")
+                    
+                    # 判斷趨勢給予不同顏色提示
+                    ma_status = "🟢 位於均線之上" if curr_p > ma20 else "🔴 跌破均線"
+                    metric_col2.metric("📈 20日均線 (MA20)", f"${ma20:.2f}", ma_status)
+                    
+                    rsi_status = "🔥 超買警戒" if curr_rsi >= 70 else ("🧊 超賣區間" if curr_rsi <= 30 else "穩健區間")
+                    metric_col3.metric("📊 RSI (14)", f"{curr_rsi:.2f}", rsi_status)
+                    
+                    # 顯示圖表
+                    st.subheader(f"📊 {search_ticker.upper()} 技術線圖")
+                    show_chart(search_ticker.upper(), df_search, curr_p)
+                    
+            except Exception as e:
+                st.error(f"❌ 發生錯誤: {e}，請稍後再試或檢查代碼格式。")
