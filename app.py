@@ -7,8 +7,8 @@ from plotly.subplots import make_subplots
 st.set_page_config(page_title="港股獵人 - 終極完全體", layout="wide")
 
 TARGET_STOCKS = [
-    "0700.HK", "3690.HK", "9988.HK", "1810.HK", "1024.HK", "9888.HK", "9618.HK", "9999.HK", "0981.HK", "1347.HK", "1024.HK", "9999.HK",  #科技
-    "1211.HK", "0175.HK", "2333.HK", "2015.HK", "9869.HK" #車
+    "0700.HK", "3690.HK", "9988.HK", "1810.HK", "1024.HK", "9888.HK", "9618.HK", "9999.HK", "0981.HK", "1347.HK",  #科技
+    "1211.HK", "0175.HK", "2333.HK", "2015.HK", "9869.HK", #車
     "2318.HK", "3988.HK", "1398.HK", "0939.HK", "0388.HK", #bank
     "0883.HK", "0857.HK", "0386.HK", #fuel
     "2269.HK", "1093.HK", "0241.HK", "2359.HK", #bio/health
