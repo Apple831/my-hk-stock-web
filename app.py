@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import os
 
-st.set_page_config(page_title="港股狙擊手 V8.1", layout="wide")
+st.set_page_config(page_title="港股狙擊手 V8.2", layout="wide")
 
 # --- 1. 名單讀取 ---
 def load_stocks():
@@ -62,7 +62,7 @@ def show_chart(ticker, df):
     st.plotly_chart(fig, use_container_width=True)
 
 # --- 4. 主程式 ---
-st.title("🏹 港股狙擊手 V8.1 (修復版)")
+st.title("🏹 港股狙擊手 V8.2")
 t1, t2, t3, t4 = st.tabs(["🌍 大市導航", "🏆 跑贏大市", "🎯 策略掃描", "🔍 個股分析"])
 
 # --- Tab 1: 大市導航 ---
@@ -72,36 +72,36 @@ with t1:
     
     with st.spinner("抓取數據中..."):
         hsi = get_stock_data("^HSI", period="6mo")
-        # 核心改動：改用 3032.HK (南方恆生科技 ETF) 替代不穩定的 ^HSTECH
-        hstech = get_stock_data("3032.HK", period="6mo")
+        # 🌟 換回真正的恆生科技指數 (Yahoo Finance 代碼為 ^HSTECH)
+        hstech = get_stock_data("^HSTECH", period="6mo")
         vix = get_stock_data("^VIX", period="6mo")
         
         with col1:
             if not hsi.empty:
                 curr = float(hsi['Close'].iloc[-1])
                 prev = float(hsi['Close'].iloc[-2])
-                st.metric("🇭🇰 恆生指數", f"{curr:.2f}", f"{((curr-prev)/prev)*100:.2f}%")
+                st.metric("🇭🇰 恆生指數 (^HSI)", f"{curr:.2f}", f"{((curr-prev)/prev)*100:.2f}%")
                 fig = go.Figure(go.Scatter(x=hsi.index, y=hsi['Close'], line=dict(color='#1f77b4')))
                 fig.update_layout(height=250, margin=dict(l=0,r=0,t=0,b=0))
                 st.plotly_chart(fig, use_container_width=True)
             else:
-                st.error("未能獲取恆指數據")
+                st.error("⚠️ Yahoo API 暫時無法獲取恆指")
 
         with col2:
             if not hstech.empty:
                 curr = float(hstech['Close'].iloc[-1])
                 prev = float(hstech['Close'].iloc[-2])
-                st.metric("🚀 恆科指 (ETF 3032)", f"{curr:.2f}", f"{((curr-prev)/prev)*100:.2f}%")
+                st.metric("🚀 恆生科技指數 (^HSTECH)", f"{curr:.2f}", f"{((curr-prev)/prev)*100:.2f}%")
                 fig = go.Figure(go.Scatter(x=hstech.index, y=hstech['Close'], line=dict(color='#ff7f0e')))
                 fig.update_layout(height=250, margin=dict(l=0,r=0,t=0,b=0))
                 st.plotly_chart(fig, use_container_width=True)
             else:
-                st.error("未能獲取科指數據")
+                st.error("⚠️ Yahoo API 暫時無法獲取科指數據")
 
         with col3:
             if not vix.empty:
                 curr_vix = float(vix['Close'].iloc[-1])
-                st.metric("🇺🇸 VIX 恐慌指數", f"{curr_vix:.2f}", f"{curr_vix - float(vix['Close'].iloc[-2]):.2f}", delta_color="inverse")
+                st.metric("🇺🇸 VIX 恐慌指數 (^VIX)", f"{curr_vix:.2f}", f"{curr_vix - float(vix['Close'].iloc[-2]):.2f}", delta_color="inverse")
                 fig = go.Figure(go.Scatter(x=vix.index, y=vix['Close'], line=dict(color='#d62728')))
                 fig.update_layout(height=250, margin=dict(l=0,r=0,t=0,b=0))
                 st.plotly_chart(fig, use_container_width=True)
@@ -114,11 +114,11 @@ with t2:
     tf = tf_map[tf_label]
     
     if st.button("🚀 開始計算相對強度"):
-        with st.spinner("正在對標大盤數據..."):
+        with st.spinner("正在對標大盤與科指數據..."):
             hsi_df = get_stock_data("^HSI", period=tf)
-            hst_df = get_stock_data("3032.HK", period=tf) # 同步替換為 3032.HK
+            # 🌟 這裡也同步換回 ^HSTECH
+            hst_df = get_stock_data("^HSTECH", period=tf) 
             
-            # 加入錯誤捕捉：如果抓不到，會明確報錯而不是直接空白
             if not hsi_df.empty and not hst_df.empty:
                 hsi_p = (hsi_df['Close'].iloc[-1] / hsi_df['Close'].iloc[0] - 1) * 100
                 hst_p = (hst_df['Close'].iloc[-1] / hst_df['Close'].iloc[0] - 1) * 100
@@ -151,7 +151,7 @@ with t2:
                     fig_comp.update_layout(title=f"相對於恆生科技指數的超額收益 ({tf_label})", height=400)
                     st.plotly_chart(fig_comp, use_container_width=True)
             else:
-                st.error("⚠️ 無法從 Yahoo Finance 獲取大盤或科指數據，請稍後重試。")
+                st.error("⚠️ 無法從 Yahoo Finance 獲取 ^HSI 或 ^HSTECH 的數據。可能是伺服器短暫不穩定，請過幾分鐘再試。")
 
 # --- Tab 3 & 4 保持不變 ---
 with t3:
