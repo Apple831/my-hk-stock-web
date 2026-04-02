@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import os
 
-st.set_page_config(page_title="港股狙擊手 V8.2", layout="wide")
+st.set_page_config(page_title="港股狙擊手 V8.3", layout="wide")
 
 # --- 1. 名單讀取 ---
 def load_stocks():
@@ -22,13 +22,18 @@ def load_stocks():
 
 TARGET_STOCKS = load_stocks()
 
-# --- 2. 數據抓取 ---
+# --- 2. 數據抓取 (新增備援邏輯) ---
 def get_stock_data(ticker, period="6mo"):
     try:
-        dat = yf.Ticker(ticker)
-        # 為了計算 1d 報酬率，至少需要 2d 的數據
-        actual_period = "2d" if period == "1d" else period
-        df = dat.history(period=actual_period)
+        # 如果是科指，啟動雙源備援
+        if ticker == "^HSTECH":
+            df = yf.Ticker("^HSTECH").history(period=period)
+            if df.empty or len(df) < 2:
+                # 🌟 備援方案：如果真科指掛了，立刻改抓 ETF
+                df = yf.Ticker("3032.HK").history(period=period)
+        else:
+            df = yf.Ticker(ticker).history(period=period)
+            
         if df.empty: return pd.DataFrame()
         
         if isinstance(df.columns, pd.MultiIndex):
@@ -62,7 +67,7 @@ def show_chart(ticker, df):
     st.plotly_chart(fig, use_container_width=True)
 
 # --- 4. 主程式 ---
-st.title("🏹 港股狙擊手 V8.2")
+st.title("🏹 港股狙擊手 V8.3 - 終極穩壓版")
 t1, t2, t3, t4 = st.tabs(["🌍 大市導航", "🏆 跑贏大市", "🎯 策略掃描", "🔍 個股分析"])
 
 # --- Tab 1: 大市導航 ---
@@ -71,37 +76,34 @@ with t1:
     col1, col2, col3 = st.columns(3)
     
     with st.spinner("抓取數據中..."):
-        hsi = get_stock_data("^HSI", period="6mo")
-        # 🌟 換回真正的恆生科技指數 (Yahoo Finance 代碼為 ^HSTECH)
-        hstech = get_stock_data("^HSTECH", period="6mo")
-        vix = get_stock_data("^VIX", period="6mo")
+        hsi = get_stock_data("^HSI")
+        hstech = get_stock_data("^HSTECH")
+        vix = get_stock_data("^VIX")
         
         with col1:
             if not hsi.empty:
-                curr = float(hsi['Close'].iloc[-1])
-                prev = float(hsi['Close'].iloc[-2])
+                curr = hsi['Close'].iloc[-1]
+                prev = hsi['Close'].iloc[-2]
                 st.metric("🇭🇰 恆生指數 (^HSI)", f"{curr:.2f}", f"{((curr-prev)/prev)*100:.2f}%")
                 fig = go.Figure(go.Scatter(x=hsi.index, y=hsi['Close'], line=dict(color='#1f77b4')))
                 fig.update_layout(height=250, margin=dict(l=0,r=0,t=0,b=0))
                 st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.error("⚠️ Yahoo API 暫時無法獲取恆指")
 
         with col2:
             if not hstech.empty:
-                curr = float(hstech['Close'].iloc[-1])
-                prev = float(hstech['Close'].iloc[-2])
-                st.metric("🚀 恆生科技指數 (^HSTECH)", f"{curr:.2f}", f"{((curr-prev)/prev)*100:.2f}%")
+                curr = hstech['Close'].iloc[-1]
+                prev = hstech['Close'].iloc[-2]
+                # 🌟 自動判斷顯示名稱
+                label = "🚀 恆生科技指數" if curr > 1000 else "🚀 恆科 ETF (3032.HK)"
+                st.metric(label, f"{curr:.2f}", f"{((curr-prev)/prev)*100:.2f}%")
                 fig = go.Figure(go.Scatter(x=hstech.index, y=hstech['Close'], line=dict(color='#ff7f0e')))
                 fig.update_layout(height=250, margin=dict(l=0,r=0,t=0,b=0))
                 st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.error("⚠️ Yahoo API 暫時無法獲取科指數據")
 
         with col3:
             if not vix.empty:
-                curr_vix = float(vix['Close'].iloc[-1])
-                st.metric("🇺🇸 VIX 恐慌指數 (^VIX)", f"{curr_vix:.2f}", f"{curr_vix - float(vix['Close'].iloc[-2]):.2f}", delta_color="inverse")
+                curr_vix = vix['Close'].iloc[-1]
+                st.metric("🇺🇸 VIX 恐慌指數", f"{curr_vix:.2f}", f"{curr_vix - vix['Close'].iloc[-2]:.2f}", delta_color="inverse")
                 fig = go.Figure(go.Scatter(x=vix.index, y=vix['Close'], line=dict(color='#d62728')))
                 fig.update_layout(height=250, margin=dict(l=0,r=0,t=0,b=0))
                 st.plotly_chart(fig, use_container_width=True)
@@ -114,46 +116,34 @@ with t2:
     tf = tf_map[tf_label]
     
     if st.button("🚀 開始計算相對強度"):
-        with st.spinner("正在對標大盤與科指數據..."):
-            hsi_df = get_stock_data("^HSI", period=tf)
-            # 🌟 這裡也同步換回 ^HSTECH
-            hst_df = get_stock_data("^HSTECH", period=tf) 
+        hsi_df = get_stock_data("^HSI", period=tf)
+        hst_df = get_stock_data("^HSTECH", period=tf)
+        
+        if not hsi_df.empty and not hst_df.empty:
+            hsi_p = (hsi_df['Close'].iloc[-1] / hsi_df['Close'].iloc[0] - 1) * 100
+            hst_p = (hst_df['Close'].iloc[-1] / hst_df['Close'].iloc[0] - 1) * 100
             
-            if not hsi_df.empty and not hst_df.empty:
-                hsi_p = (hsi_df['Close'].iloc[-1] / hsi_df['Close'].iloc[0] - 1) * 100
-                hst_p = (hst_df['Close'].iloc[-1] / hst_df['Close'].iloc[0] - 1) * 100
-                
-                c1, c2 = st.columns(2)
-                c1.info(f"恆生指數 ({tf_label}) 報酬率: **{hsi_p:.2f}%**")
-                c2.warning(f"恆生科技指數 ({tf_label}) 報酬率: **{hst_p:.2f}%**")
-                
-                results = []
-                pbar = st.progress(0)
-                for i, s in enumerate(TARGET_STOCKS):
-                    pbar.progress((i+1)/len(TARGET_STOCKS))
-                    df = get_stock_data(s, period=tf)
-                    if not df.empty and len(df) >= 2:
-                        p = (df['Close'].iloc[-1] / df['Close'].iloc[0] - 1) * 100
-                        results.append({
-                            "代碼": s, 
-                            "報酬率(%)": round(p, 2), 
-                            "領先恆指(%)": round(p - hsi_p, 2),
-                            "領先科指(%)": round(p - hst_p, 2)
-                        })
-                
-                if results:
-                    res_df = pd.DataFrame(results).sort_values("領先科指(%)", ascending=False)
-                    style_func = res_df.style.map if hasattr(res_df.style, 'map') else res_df.style.applymap
-                    st.dataframe(style_func(lambda x: 'color:red' if x > 0 else 'color:green', subset=['領先恆指(%)', '領先科指(%)']), use_container_width=True, hide_index=True)
-                    
-                    fig_comp = go.Figure()
-                    fig_comp.add_trace(go.Bar(x=res_df["代碼"], y=res_df["領先科指(%)"], name="對標科指 Alpha", marker_color='#ff7f0e'))
-                    fig_comp.update_layout(title=f"相對於恆生科技指數的超額收益 ({tf_label})", height=400)
-                    st.plotly_chart(fig_comp, use_container_width=True)
-            else:
-                st.error("⚠️ 無法從 Yahoo Finance 獲取 ^HSI 或 ^HSTECH 的數據。可能是伺服器短暫不穩定，請過幾分鐘再試。")
+            c1, c2 = st.columns(2)
+            c1.info(f"恆指報酬率: {hsi_p:.2f}%")
+            c2.warning(f"科指報酬率: {hst_p:.2f}%")
+            
+            results = []
+            pbar = st.progress(0)
+            for i, s in enumerate(TARGET_STOCKS):
+                pbar.progress((i+1)/len(TARGET_STOCKS))
+                df = get_stock_data(s, period=tf)
+                if not df.empty and len(df) >= 2:
+                    p = (df['Close'].iloc[-1] / df['Close'].iloc[0] - 1) * 100
+                    results.append({"代碼": s, "報酬率(%)": round(p, 2), "領先恆指(%)": round(p - hsi_p, 2), "領先科指(%)": round(p - hst_p, 2)})
+            
+            if results:
+                res_df = pd.DataFrame(results).sort_values("領先科指(%)", ascending=False)
+                style_func = res_df.style.map if hasattr(res_df.style, 'map') else res_df.style.applymap
+                st.dataframe(style_func(lambda x: 'color:red' if x > 0 else 'color:green', subset=['領先恆指(%)', '領先科指(%)']), use_container_width=True)
+        else:
+            st.error("大數據源目前繁忙，請稍後再試。")
 
-# --- Tab 3 & 4 保持不變 ---
+# --- Tab 3 & 4 (略) ---
 with t3:
     if st.button("🔥 執行全市場狙擊"):
         hits = []
@@ -172,7 +162,6 @@ with t3:
                 hits.append({"代碼": s, "現價": round(c['Close'], 2), "量比": round(vol_r, 2)})
                 st.success(f"🎯 發現標的: {s}")
                 show_chart(s, df)
-        if not hits: st.warning("目前無符合條件標的")
 
 with t4:
     s_input = st.text_input("輸入代碼", "0700.HK").upper()
