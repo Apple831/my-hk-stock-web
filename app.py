@@ -5,13 +5,15 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import os
 
-st.set_page_config(page_title="港股狙擊手 V8.9.2", layout="wide")
+st.set_page_config(page_title="港股狙擊手 V8.9.3", layout="wide")
 
 # --- 1. 核心數據抓取 ---
 def get_stock_data(ticker, period="1y"):
     try:
         if ticker == "^HSTECH":
-            df = yf.download("^HSTECH", period=period, progress=False, auto_adjust=True)
+            df = yf.download("800700.HK", period=period, progress=False, auto_adjust=True)
+            if df.empty:
+                df = yf.download("^HSTECH", period=period, progress=False, auto_adjust=True)
             if df.empty:
                 df = yf.download("3032.HK", period=period, progress=False, auto_adjust=True)
         elif ticker == "^HSI":
@@ -61,7 +63,24 @@ def calculate_indicators(df):
 
     return df
 
-# --- 3. 繪圖（綠漲紅跌）---
+# --- 3. 掃描結果 Metric 卡片 ---
+def show_scan_metrics(results):
+    """在表格上方顯示每個標的的現價 + 漲跌% 卡片"""
+    cols_per_row = 4
+    for row_start in range(0, len(results), cols_per_row):
+        chunk = results[row_start: row_start + cols_per_row]
+        cols = st.columns(cols_per_row)
+        for col, r in zip(cols, chunk):
+            pct = r['漲跌%']
+            arrow = "🟢 ▲" if pct >= 0 else "🔴 ▼"
+            delta_str = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+            col.metric(
+                label=f"{arrow} {r['代碼']}",
+                value=f"${r['現價']:.2f}",
+                delta=delta_str,
+            )
+
+# --- 4. 繪圖（綠漲紅跌）---
 def show_chart(ticker, df):
     fig = make_subplots(
         rows=4, cols=1, shared_xaxes=True,
@@ -264,13 +283,15 @@ with tabs[2]:
 
             if results:
                 st.success(f"✅ 發現 {len(results)} 個標的")
-                st.dataframe(
-                    pd.DataFrame(results).style.map(
-                        lambda x: 'color: #26a69a' if x > 0 else 'color: #ef5350',
-                        subset=['漲跌%']
-                    ),
-                    use_container_width=True
-                )
+                # 現價 + 漲跌% 卡片
+                show_scan_metrics(results)
+                st.divider()
+                # 明細表格（小數 2 位）
+                df_show = pd.DataFrame(results)
+                df_show['現價']  = df_show['現價'].map(lambda x: f"{x:.2f}")
+                df_show['漲跌%'] = df_show['漲跌%'].map(lambda x: f"{'+' if x>=0 else ''}{x:.2f}%")
+                df_show['J值']   = df_show['J值'].map(lambda x: f"{x:.1f}")
+                st.dataframe(df_show, use_container_width=True)
                 for s in hits_dfs:
                     st.write(f"### 🎯 {s}")
                     show_chart(s, hits_dfs[s])
@@ -324,13 +345,15 @@ with tabs[3]:
 
             if results:
                 st.error(f"🔴 發現 {len(results)} 個標的")
-                st.dataframe(
-                    pd.DataFrame(results).style.map(
-                        lambda x: 'color: #26a69a' if x > 0 else 'color: #ef5350',
-                        subset=['漲跌%']
-                    ),
-                    use_container_width=True
-                )
+                # 現價 + 漲跌% 卡片
+                show_scan_metrics(results)
+                st.divider()
+                # 明細表格（小數 2 位）
+                df_show = pd.DataFrame(results)
+                df_show['現價']  = df_show['現價'].map(lambda x: f"{x:.2f}")
+                df_show['漲跌%'] = df_show['漲跌%'].map(lambda x: f"{'+' if x>=0 else ''}{x:.2f}%")
+                df_show['J值']   = df_show['J值'].map(lambda x: f"{x:.1f}")
+                st.dataframe(df_show, use_container_width=True)
                 for s in hits_dfs:
                     st.write(f"### ⚠️ {s}")
                     show_chart(s, hits_dfs[s])
