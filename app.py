@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import os
 
-st.set_page_config(page_title="港股狙擊手 V8.9.3", layout="wide")
+st.set_page_config(page_title="港股狙擊手 V8.9.1", layout="wide")
 
 # --- 1. 核心數據抓取 ---
 def get_stock_data(ticker, period="1y"):
