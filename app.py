@@ -3,9 +3,74 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import requests
 import os
 
 st.set_page_config(page_title="港股狙擊手 V8.9.3", layout="wide")
+
+# ══════════════════════════════════════════════════════════════════
+# TradingView Screener — 直接 call，不需要 subprocess / 外部腳本
+# ══════════════════════════════════════════════════════════════════
+TV_URL = "https://scanner.tradingview.com/hongkong/scan"
+TV_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    "Content-Type": "application/json",
+    "Origin":  "https://www.tradingview.com",
+    "Referer": "https://www.tradingview.com/",
+}
+
+def fetch_stocks_from_tradingview(min_cap_hkd: int = 10_000_000_000) -> list:
+    """
+    用 TradingView Screener 篩選港股：
+      - 主要上市 (is_primary = True)
+      - 市值 > min_cap_hkd 港元（預設 100 億）
+      - EPS TTM > 0（盈利公司）
+    回傳 ["0700.HK", "9988.HK", ...] 格式清單
+    """
+    payload = {
+        "filter": [
+            {"left": "market_cap_basic",             "operation": "greater", "right": min_cap_hkd / 7.8},
+            {"left": "earnings_per_share_basic_ttm", "operation": "greater", "right": 0},
+            {"left": "is_primary",                   "operation": "equal",   "right": True},
+        ],
+        "markets": ["hongkong"],
+        "symbols": {"query": {"types": ["stock"]}, "tickers": []},
+        "columns": ["name", "description", "close",
+                    "market_cap_basic", "earnings_per_share_basic_ttm"],
+        "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
+        "range": [0, 500]
+    }
+    resp = requests.post(TV_URL, headers=TV_HEADERS, json=payload, timeout=20)
+    resp.raise_for_status()
+    rows = resp.json().get("data", [])
+    tickers = []
+    for row in rows:
+        d = row.get("d", [])
+        if not d:
+            continue
+        try:
+            tickers.append(f"{int(d[0]):04d}.HK")
+        except (ValueError, TypeError):
+            continue
+    return tickers
+
+# ── Sidebar：更新股票清單 ─────────────────────────────────────────
+with st.sidebar:
+    st.markdown("### ⚙️ 股票清單")
+    st.caption(f"目前清單：{len(st.session_state.get('stocks', [])) or '讀取中'} 隻")
+    if st.button("🔄 更新清單 (TradingView)"):
+        with st.spinner("篩選中：主要上市 | 市值>100億 | EPS>0 ..."):
+            try:
+                new_stocks = fetch_stocks_from_tradingview()
+                if new_stocks:
+                    st.session_state["stocks"] = new_stocks
+                    st.success(f"✅ 已更新！共 {len(new_stocks)} 隻")
+                    st.rerun()
+                else:
+                    st.warning("⚠️ 沒有取得數據")
+            except Exception as e:
+                st.error(f"❌ 失敗：{e}")
+
 
 # --- 1. 核心數據抓取 ---
 def get_stock_data(ticker, period="1y"):
@@ -145,20 +210,18 @@ def show_chart(ticker, df):
     )
     st.plotly_chart(fig, use_container_width=True)
 
-# --- 5. 載入股票清單 ---
+# --- 5. 載入股票清單（優先用 session_state，其次 stocks.txt）---
 def load_stocks():
-    if not os.path.exists('stocks.txt'):
-        return ["0700.HK", "9988.HK", "3690.HK"]
-    with open('stocks.txt', 'r') as f:
-        return [line.split('#')[0].strip() for line in f if ".HK" in line]
+    if "stocks" in st.session_state and st.session_state["stocks"]:
+        return st.session_state["stocks"]
+    if os.path.exists('stocks.txt'):
+        stocks = [line.split('#')[0].strip() for line in open('stocks.txt', 'r') if ".HK" in line]
+        if stocks:
+            st.session_state["stocks"] = stocks
+            return stocks
+    return ["0700.HK", "9988.HK", "3690.HK"]  # 最低備援
 
 STOCKS = load_stocks()
-
-if st.sidebar.button("🔄 更新股票清單"):
-    import subprocess
-    subprocess.run(["python", "update_stocks.py"], check=True)
-    st.sidebar.success("stocks.txt 已更新！")
-    st.rerun()
 
 # --- 6. 主程式 UI ---
 st.title("🏹 港股狙擊手 V8.9.3")
