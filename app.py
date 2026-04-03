@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import os
 
-st.set_page_config(page_title="港股狙擊手 V8.9.1", layout="wide")
+st.set_page_config(page_title="港股狙擊手 V8.9.2", layout="wide")
 
 # --- 1. 核心數據抓取 ---
 def get_stock_data(ticker, period="1y"):
@@ -145,7 +145,7 @@ def show_chart(ticker, df):
     )
     st.plotly_chart(fig, use_container_width=True)
 
-# --- 4. 載入股票清單 ---
+# --- 5. 載入股票清單 ---
 def load_stocks():
     if not os.path.exists('stocks.txt'):
         return ["0700.HK", "9988.HK", "3690.HK"]
@@ -154,18 +154,19 @@ def load_stocks():
 
 STOCKS = load_stocks()
 
-# --- 5. 主程式 UI ---
-st.title("🏹 港股狙擊手 V8.9.1")
+# --- 6. 主程式 UI ---
+st.title("🏹 港股狙擊手 V8.9.2")
 
 tabs = st.tabs(["🌍 指數", "🏆 跑贏大市", "🟢 買入掃描", "🔴 賣出掃描", "🔍 分析"])
 
 # ===================== TAB 0：指數 =====================
 with tabs[0]:
     st.subheader("🌍 主要指數走勢")
+    # 修改：替換成 VIX
     indices = {
         "恆生指數 (^HSI)": "^HSI",
         "恆生科技 (^HSTECH)": "^HSTECH",
-        "滬深300 (000300.SS)": "000300.SS",
+        "恐慌指數 (^VIX)": "^VIX",
     }
     col1, col2 = st.columns([1, 3])
     with col1:
@@ -184,43 +185,67 @@ with tabs[0]:
 # ===================== TAB 1：跑贏大市 =====================
 with tabs[1]:
     st.subheader("🏆 跑贏大市排行")
-    period_beat = st.selectbox("比較週期", ["1mo", "3mo", "6mo"], index=1, key="beat_period")
+    
+    # 修改：新增 1日 和 1週，並設定對應的 K 線回推天數
+    period_options = {
+        "1日 (1d)": 2,    # 取最後2天來算1日升跌
+        "1週 (1w)": 6,    # 取最後6天來算1週升跌
+        "1個月 (1mo)": 22,
+        "3個月 (3mo)": 63,
+        "6個月 (6mo)": 126
+    }
+    period_beat = st.selectbox("比較週期", list(period_options.keys()), index=2, key="beat_period")
 
     if st.button("📊 開始計算跑贏大市"):
         with st.spinner("正在比較各股與恆指表現..."):
-            df_hsi = get_stock_data("^HSI", period=period_beat)
+            lb = period_options[period_beat]
+            
+            # 統一抓 6 個月確保有足夠歷史資料切片，防止 1d 抓不到數據
+            df_hsi = get_stock_data("^HSI", period="6mo")
             if df_hsi.empty:
                 st.error("無法取得恆指數據")
             else:
-                hsi_ret = (df_hsi['Close'].iloc[-1] - df_hsi['Close'].iloc[0]) / df_hsi['Close'].iloc[0] * 100
+                start_idx_hsi = -lb if len(df_hsi) >= lb else 0
+                hsi_ret = (df_hsi['Close'].iloc[-1] - df_hsi['Close'].iloc[start_idx_hsi]) / df_hsi['Close'].iloc[start_idx_hsi] * 100
 
                 results = []
                 pbar = st.progress(0)
                 for i, s in enumerate(STOCKS):
                     pbar.progress((i + 1) / len(STOCKS))
-                    df_s = get_stock_data(s, period=period_beat)
-                    if df_s.empty or len(df_s) < 5:
+                    df_s = get_stock_data(s, period="6mo")
+                    if df_s.empty or len(df_s) < 2:
                         continue
-                    stock_ret = (df_s['Close'].iloc[-1] - df_s['Close'].iloc[0]) / df_s['Close'].iloc[0] * 100
+                    
+                    start_idx_s = -lb if len(df_s) >= lb else 0
+                    stock_ret = (df_s['Close'].iloc[-1] - df_s['Close'].iloc[start_idx_s]) / df_s['Close'].iloc[start_idx_s] * 100
+                    current_price = df_s['Close'].iloc[-1]
                     excess = stock_ret - hsi_ret
+                    
+                    # 修改：符合你要求的欄位 (代碼, 現價, 股票升幅%, 恆指升幅%, 超額回報%)
                     results.append({
                         "代碼": s,
-                        "股票回報%": round(float(stock_ret), 2),
-                        "恆指回報%": round(float(hsi_ret), 2),
-                        "超額回報%": round(float(excess), 2),
+                        "現價": current_price,
+                        "股票升幅%": stock_ret,
+                        "恆指升幅%": hsi_ret,
+                        "超額回報%": excess,
                     })
                 pbar.empty()
 
                 if results:
                     df_res = pd.DataFrame(results).sort_values("超額回報%", ascending=False)
-                    st.success(f"共分析 {len(df_res)} 隻股票，恆指回報：{hsi_ret:.2f}%")
-                    st.dataframe(
-                        df_res.style.map(
-                            lambda x: 'color: #26a69a' if x > 0 else 'color: #ef5350',
-                            subset=['超額回報%', '股票回報%']
-                        ),
-                        use_container_width=True
+                    st.success(f"✅ 共分析 {len(df_res)} 隻股票，期間恆指回報：{hsi_ret:.2f}%")
+                    
+                    # 修改：利用 Pandas Style 美化表格，綠漲紅跌一目了然
+                    styled_df = df_res.style.format({
+                        "現價": "${:.2f}",
+                        "股票升幅%": "{:+.2f}%",
+                        "恆指升幅%": "{:+.2f}%",
+                        "超額回報%": "{:+.2f}%"
+                    }).map(
+                        lambda x: 'color: #26a69a' if x > 0 else ('color: #ef5350' if x < 0 else ''),
+                        subset=['股票升幅%', '超額回報%']
                     )
+                    st.dataframe(styled_df, use_container_width=True)
                 else:
                     st.warning("無法取得足夠數據")
 
@@ -259,7 +284,6 @@ with tabs[2]:
                 checks = []
                 if b1: checks.append(bool(c['Close'] > c['MA60']))
                 if b2: checks.append(bool(c['MA5'] > c['MA10']) and bool(c['MA10'] > c['MA20']))
-                # 修復：拆開 and 條件，避免 pandas Series 布林歧義錯誤
                 if b3:
                     high_break = bool(c['Close'] > df['High'].iloc[-21:-1].max())
                     vol_break  = bool(c['Volume'] > vol_avg * 1.5)
@@ -283,10 +307,8 @@ with tabs[2]:
 
             if results:
                 st.success(f"✅ 發現 {len(results)} 個標的")
-                # 現價 + 漲跌% 卡片
                 show_scan_metrics(results)
                 st.divider()
-                # 明細表格（小數 2 位）
                 df_show = pd.DataFrame(results)
                 df_show['現價']  = df_show['現價'].map(lambda x: f"{x:.2f}")
                 df_show['漲跌%'] = df_show['漲跌%'].map(lambda x: f"{'+' if x>=0 else ''}{x:.2f}%")
@@ -345,10 +367,8 @@ with tabs[3]:
 
             if results:
                 st.error(f"🔴 發現 {len(results)} 個標的")
-                # 現價 + 漲跌% 卡片
                 show_scan_metrics(results)
                 st.divider()
-                # 明細表格（小數 2 位）
                 df_show = pd.DataFrame(results)
                 df_show['現價']  = df_show['現價'].map(lambda x: f"{x:.2f}")
                 df_show['漲跌%'] = df_show['漲跌%'].map(lambda x: f"{'+' if x>=0 else ''}{x:.2f}%")
