@@ -7,7 +7,7 @@ from datetime import datetime
 import requests
 import os
 
-st.set_page_config(page_title="港股狙擊手 V9.1.1", layout="wide")
+st.set_page_config(page_title="港股狙擊手 V9.2", layout="wide")
 
 # ══════════════════════════════════════════════════════════════════
 # ① 所有函數定義（必須在 sidebar / UI 之前）
@@ -340,7 +340,7 @@ with st.sidebar:
 # ③ 主 UI
 # ══════════════════════════════════════════════════════════════════
 STOCKS = load_stocks()
-st.title("🏹 港股狙擊手 V9.1.1")
+st.title("🏹 港股狙擊手 V9.2")
 tabs = st.tabs(["🌍 指數", "🏆 跑贏大市", "🟢 買入掃描", "🔴 賣出掃描", "🔍 分析"])
 
 # ── TAB 0：指數 ───────────────────────────────────────────────────
@@ -631,25 +631,187 @@ with tabs[3]:
                 st.warning("目前沒有符合賣出條件的股票，請嘗試減少勾選的條件數量。")
 
 # ── TAB 4：分析 ───────────────────────────────────────────────────
+def evaluate_signals(df: pd.DataFrame) -> dict:
+    """
+    對單支股票評估所有買入/賣出策略，
+    回傳 {"buy": [(name, desc, True/False), ...], "sell": [...]}
+    """
+    if df.empty or len(df) < 60:
+        return {"buy": [], "sell": []}
+
+    c, p    = df.iloc[-1], df.iloc[-2]
+    vol_avg = df["Volume"].rolling(20).mean().iloc[-1]
+
+    # ── 買入策略 ──────────────────────────────────────────────────
+    resist    = df["High"].iloc[-21:-1].max()
+    b1_hit    = bool(c["Close"] > resist) and bool(c["Volume"] > vol_avg * 1.5)
+
+    b2_hit    = bool(c["MA5"] > c["MA20"]) and bool(p["MA5"] <= p["MA20"])
+
+    pl        = df["Close"].iloc[-20:].min()
+    dl        = df["DIF"].iloc[-20:].min()
+    b3_hit    = bool(c["Close"] <= pl * 1.005) and bool(c["DIF"] > dl * 1.01)
+
+    b4_hit    = bool(c["J"] < 10)
+
+    b5_hit    = bool(c["Open"] < p["Low"])
+
+    was_below = bool(df["Close"].iloc[-10:-1].mean() < df["MA60"].iloc[-10:-1].mean())
+    b6_hit    = was_below and bool(c["Close"] > c["MA20"]) and bool(p["Close"] <= p["MA20"]) and bool(c["Volume"] > vol_avg * 1.3)
+
+    b7_hit    = bool(c["Close"] < c["BB_lower"])
+
+    b8_hit    = bool(c["RSI"] < 30)
+
+    b9_hit    = bool(c["DIF"] > c["DEA"]) and bool(p["DIF"] <= p["DEA"])
+
+    buy_signals = [
+        ("① 突破阻力位 + 放量",    f"收盤 {c['Close']:.2f} {'>' if b1_hit else '<='} 前高 {resist:.2f}，量比 {c['Volume']/vol_avg:.1f}x",     b1_hit),
+        ("② MA5 金叉 MA20",        f"MA5={c['MA5']:.2f}  MA20={c['MA20']:.2f}  昨MA5={p['MA5']:.2f}",                                          b2_hit),
+        ("③ 底背離（MACD未新低）",  f"收盤={c['Close']:.2f}  20日低={pl:.2f}  DIF={c['DIF']:.4f}  DIF低={dl:.4f}",                              b3_hit),
+        ("④ KDJ 超賣（J < 10）",   f"J值 = {c['J']:.1f}",                                                                                       b4_hit),
+        ("⑤ 缺口低開",             f"今開 {c['Open']:.2f} {'<' if b5_hit else '>='} 昨低 {p['Low']:.2f}",                                       b5_hit),
+        ("⑥ 底部形態突破 MA20",    f"均線低位={was_below}  站上MA20={'是' if bool(c['Close']>c['MA20']) else '否'}  量比={c['Volume']/vol_avg:.1f}x", b6_hit),
+        ("⑦ 布林帶下軌",           f"收盤 {c['Close']:.2f}  BB下軌 {c['BB_lower']:.2f}",                                                         b7_hit),
+        ("⑧ RSI 超賣（< 30）",     f"RSI = {c['RSI']:.1f}",                                                                                      b8_hit),
+        ("⑨ MACD 金叉",            f"DIF={c['DIF']:.4f}  DEA={c['DEA']:.4f}  昨DIF={p['DIF']:.4f}",                                             b9_hit),
+    ]
+
+    # ── 賣出策略 ──────────────────────────────────────────────────
+    s1_hit    = bool(c["Open"] > p["High"])
+
+    was_above = bool(df["Close"].iloc[-10:-1].mean() > df["MA60"].iloc[-10:-1].mean())
+    s2_hit    = was_above and bool(c["Close"] < c["MA20"]) and bool(p["Close"] >= p["MA20"]) and bool(c["Volume"] > vol_avg * 1.3)
+
+    s3_hit    = bool(c["Close"] > c["BB_upper"])
+
+    ph        = df["Close"].iloc[-10:].max()
+    s4_hit    = bool(c["Close"] >= ph * 0.995) and bool(c["Volume"] < vol_avg * 0.6)
+
+    pct_chg   = (c["Close"] - p["Close"]) / p["Close"] * 100
+    s5_hit    = bool(pct_chg < -2) and bool(c["Volume"] > vol_avg * 1.5)
+
+    s6_hit    = bool(c["MA5"] < c["MA20"]) and bool(p["MA5"] >= p["MA20"])
+
+    s7_hit    = bool(c["RSI"] > 70)
+
+    s8_hit    = bool(c["DIF"] < c["DEA"]) and bool(p["DIF"] >= p["DEA"])
+
+    sell_signals = [
+        ("⑤ 缺口高開",             f"今開 {c['Open']:.2f} {'>' if s1_hit else '<='} 昨高 {p['High']:.2f}",                                      s1_hit),
+        ("⑥ 頭部形態跌破 MA20",    f"均線高位={was_above}  跌破MA20={'是' if bool(c['Close']<c['MA20']) else '否'}  量比={c['Volume']/vol_avg:.1f}x", s2_hit),
+        ("⑦ 布林帶上軌",           f"收盤 {c['Close']:.2f}  BB上軌 {c['BB_upper']:.2f}",                                                         s3_hit),
+        ("⑧ 上漲縮量",             f"近高={ph:.2f}  量比={c['Volume']/vol_avg:.1f}x（需<0.6x）",                                                  s4_hit),
+        ("⑧ 放量急跌",             f"跌幅={pct_chg:.2f}%  量比={c['Volume']/vol_avg:.1f}x",                                                      s5_hit),
+        ("② MA5 死叉 MA20",        f"MA5={c['MA5']:.2f}  MA20={c['MA20']:.2f}  昨MA5={p['MA5']:.2f}",                                           s6_hit),
+        ("⑨ RSI 超買（> 70）",     f"RSI = {c['RSI']:.1f}",                                                                                      s7_hit),
+        ("⑩ MACD 死叉",            f"DIF={c['DIF']:.4f}  DEA={c['DEA']:.4f}  昨DIF={p['DIF']:.4f}",                                             s8_hit),
+    ]
+
+    return {"buy": buy_signals, "sell": sell_signals}
+
+
 with tabs[4]:
-    st.subheader("🔍 個股技術分析")
+    st.subheader("🔍 個股深度分析")
+
     col_left, col_right = st.columns([1, 3])
     with col_left:
         custom_ticker   = st.text_input("輸入股票代碼", value="0700.HK").upper()
         analysis_period = st.selectbox("週期", ["3mo", "6mo", "1y", "2y"], index=2, key="analysis_period")
-        analyze_btn     = st.button("🔍 分析")
+        analyze_btn     = st.button("🔍 開始分析", type="primary")
+
     with col_right:
         if analyze_btn:
             with st.spinner(f"正在分析 {custom_ticker}..."):
                 df_a = get_stock_data(custom_ticker, period=analysis_period)
+
             if df_a.empty:
                 st.error(f"❌ 無法取得 {custom_ticker} 數據，請確認代碼正確。")
             else:
                 df_a = calculate_indicators(df_a)
                 c    = df_a.iloc[-1]
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("現價",    f"{c['Close']:.2f}")
-                m2.metric("MA20",   f"{c['MA20']:.2f}", f"{((c['Close']-c['MA20'])/c['MA20']*100):.1f}%")
-                m3.metric("RSI",    f"{c['RSI']:.1f}")
-                m4.metric("MACD柱", f"{c['MACD_Hist']:.4f}")
+                p    = df_a.iloc[-2]
+
+                # ── 頂部 Metrics ──────────────────────────────────
+                pct_1d = (c["Close"] - p["Close"]) / p["Close"] * 100
+                m1, m2, m3, m4, m5, m6 = st.columns(6)
+                m1.metric("現價 (HKD)",  f"{c['Close']:.2f}",  f"{pct_1d:+.2f}%")
+                m2.metric("MA20",        f"{c['MA20']:.2f}",   f"{((c['Close']-c['MA20'])/c['MA20']*100):+.1f}%")
+                m3.metric("MA60",        f"{c['MA60']:.2f}",   f"{((c['Close']-c['MA60'])/c['MA60']*100):+.1f}%")
+                m4.metric("RSI (14)",    f"{c['RSI']:.1f}",    "超賣" if c["RSI"] < 30 else ("超買" if c["RSI"] > 70 else "中性"))
+                m5.metric("J 值",        f"{c['J']:.1f}",      "超賣" if c["J"] < 10 else ("超買" if c["J"] > 90 else "中性"))
+                m6.metric("MACD 柱",     f"{c['MACD_Hist']:.4f}", "多頭" if c["MACD_Hist"] > 0 else "空頭")
+
+                st.divider()
+
+                # ── 策略訊號面板 ──────────────────────────────────
+                signals = evaluate_signals(df_a)
+                buy_hits  = [s for s in signals["buy"]  if s[2]]
+                sell_hits = [s for s in signals["sell"] if s[2]]
+                buy_miss  = [s for s in signals["buy"]  if not s[2]]
+                sell_miss = [s for s in signals["sell"] if not s[2]]
+
+                # 整體評分
+                buy_score  = len(buy_hits)
+                sell_score = len(sell_hits)
+                total_b    = len(signals["buy"])
+                total_s    = len(signals["sell"])
+
+                if buy_score > sell_score and buy_score >= 2:
+                    verdict_color = "#26a69a"
+                    verdict       = f"🟢 偏多訊號（{buy_score} 買 / {sell_score} 賣）"
+                elif sell_score > buy_score and sell_score >= 2:
+                    verdict_color = "#ef5350"
+                    verdict       = f"🔴 偏空訊號（{buy_score} 買 / {sell_score} 賣）"
+                else:
+                    verdict_color = "#f9a825"
+                    verdict       = f"🟡 中性觀望（{buy_score} 買 / {sell_score} 賣）"
+
+                st.markdown(
+                    f"<div style='background:rgba(255,255,255,0.05);border-left:4px solid {verdict_color};"
+                    f"padding:10px 16px;border-radius:6px;font-size:18px;font-weight:bold'>{verdict}</div>",
+                    unsafe_allow_html=True,
+                )
+                st.caption("策略訊號以最新一根 K 線數據為準")
+                st.divider()
+
+                # ── 買入 / 賣出訊號兩欄並排 ──────────────────────
+                col_buy, col_sell = st.columns(2)
+
+                with col_buy:
+                    st.markdown("### 🟢 買入策略")
+                    if buy_hits:
+                        for name, detail, _ in buy_hits:
+                            with st.container():
+                                st.success(f"✅ **{name}**")
+                                st.caption(detail)
+                    else:
+                        st.info("目前沒有觸發任何買入策略")
+
+                    if buy_miss:
+                        with st.expander(f"未觸發的買入策略（{len(buy_miss)} 個）"):
+                            for name, detail, _ in buy_miss:
+                                st.markdown(f"⬜ **{name}**")
+                                st.caption(detail)
+
+                with col_sell:
+                    st.markdown("### 🔴 賣出策略")
+                    if sell_hits:
+                        for name, detail, _ in sell_hits:
+                            with st.container():
+                                st.error(f"🚨 **{name}**")
+                                st.caption(detail)
+                    else:
+                        st.info("目前沒有觸發任何賣出策略")
+
+                    if sell_miss:
+                        with st.expander(f"未觸發的賣出策略（{len(sell_miss)} 個）"):
+                            for name, detail, _ in sell_miss:
+                                st.markdown(f"⬜ **{name}**")
+                                st.caption(detail)
+
+                st.divider()
+
+                # ── K 線圖 ────────────────────────────────────────
+                st.markdown(f"### 📈 {custom_ticker} 技術圖表")
                 show_chart(custom_ticker, df_a)
