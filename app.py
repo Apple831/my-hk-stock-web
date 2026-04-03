@@ -7,11 +7,159 @@ from datetime import datetime
 import requests
 import os
 
-st.set_page_config(page_title="港股狙擊手 V9.1", layout="wide")
+st.set_page_config(page_title="港股狙擊手 V9.1.1", layout="wide")
 
 # ══════════════════════════════════════════════════════════════════
-# TradingView Screener
+# ① 所有函數定義（必須在 sidebar / UI 之前）
 # ══════════════════════════════════════════════════════════════════
+
+# ── 股票清單 ───────────────────────────────────────────────────────
+def load_stocks_from_file() -> list:
+    if os.path.exists("stocks.txt"):
+        stocks = [line.split("#")[0].strip() for line in open("stocks.txt", "r", encoding="utf-8") if ".HK" in line]
+        if stocks:
+            return stocks
+    return ["0700.HK", "9988.HK", "3690.HK"]
+
+def load_stocks() -> list:
+    if st.session_state.get("stocks"):
+        return st.session_state["stocks"]
+    stocks = load_stocks_from_file()
+    st.session_state["stocks"] = stocks
+    return stocks
+
+# ── 時區安全處理（修復 tz_localize 報錯）────────────────────────────
+def normalize_index(df: pd.DataFrame) -> pd.DataFrame:
+    """統一處理時區：有時區先 convert，沒有就直接用"""
+    try:
+        if df.index.tz is not None:
+            df.index = df.index.tz_convert("Asia/Hong_Kong").tz_localize(None)
+        else:
+            df.index = pd.to_datetime(df.index)
+    except Exception:
+        df.index = pd.to_datetime(df.index, utc=True).tz_localize(None)
+    return df
+
+# ── MultiIndex 展平（新版 yfinance 常見）─────────────────────────────
+def flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [col[0] if col[1] == "" else col[0] for col in df.columns]
+    df.columns = [str(c).strip() for c in df.columns]
+    return df
+
+# ── 單股下載（指數 / 分析 Tab 用）────────────────────────────────────
+def get_stock_data(ticker: str, period: str = "1y") -> pd.DataFrame:
+    try:
+        if ticker == "^HSTECH":
+            for sym in ["800700.HK", "^HSTECH", "3032.HK"]:
+                df = yf.download(sym, period=period, progress=False, auto_adjust=True)
+                if not df.empty:
+                    break
+        elif ticker == "^HSI":
+            for sym in ["^HSI", "2800.HK"]:
+                df = yf.download(sym, period=period, progress=False, auto_adjust=True)
+                if not df.empty:
+                    break
+        else:
+            df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
+
+        if df.empty:
+            return pd.DataFrame()
+        df = flatten_columns(df)
+        df = normalize_index(df)
+        return df.dropna(subset=["Close"])
+    except Exception:
+        return pd.DataFrame()
+
+# ── 指標計算 ──────────────────────────────────────────────────────
+def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["MA5"]  = df["Close"].rolling(5).mean()
+    df["MA10"] = df["Close"].rolling(10).mean()
+    df["MA20"] = df["Close"].rolling(20).mean()
+    df["MA60"] = df["Close"].rolling(60).mean()
+
+    exp1 = df["Close"].ewm(span=12, adjust=False).mean()
+    exp2 = df["Close"].ewm(span=26, adjust=False).mean()
+    df["DIF"]       = exp1 - exp2
+    df["DEA"]       = df["DIF"].ewm(span=9, adjust=False).mean()
+    df["MACD_Hist"] = df["DIF"] - df["DEA"]
+
+    low9  = df["Low"].rolling(9).min()
+    high9 = df["High"].rolling(9).max()
+    denom = (high9 - low9).replace(0, 1)
+    rsv   = (df["Close"] - low9) / denom * 100
+    df["K"] = rsv.ewm(com=2, adjust=False).mean()
+    df["D"] = df["K"].ewm(com=2, adjust=False).mean()
+    df["J"] = 3 * df["K"] - 2 * df["D"]
+
+    bb_mid         = df["Close"].rolling(20).mean()
+    bb_std         = df["Close"].rolling(20).std()
+    df["BB_upper"] = bb_mid + 2 * bb_std
+    df["BB_mid"]   = bb_mid
+    df["BB_lower"] = bb_mid - 2 * bb_std
+
+    delta       = df["Close"].diff()
+    gain        = delta.clip(lower=0).rolling(14).mean()
+    loss        = (-delta.clip(upper=0)).rolling(14).mean()
+    rs          = gain / loss.replace(0, 1e-9)
+    df["RSI"]   = 100 - (100 / (1 + rs))
+
+    return df
+
+# ── 批量下載（掃描 Tab 用）────────────────────────────────────────
+def batch_download(tickers: list, period: str = "1y") -> dict:
+    cache = {}
+    try:
+        raw = yf.download(
+            tickers, period=period,
+            progress=False, auto_adjust=True,
+            group_by="ticker", threads=True
+        )
+    except Exception:
+        return cache
+
+    if raw.empty:
+        return cache
+
+    # 新版 yfinance group_by="ticker" → MultiIndex level0=ticker, level1=OHLCV
+    # 舊版可能是 level0=OHLCV, level1=ticker — 兩種都要處理
+    if isinstance(raw.columns, pd.MultiIndex):
+        lvl0 = raw.columns.get_level_values(0).unique().tolist()
+        lvl1 = raw.columns.get_level_values(1).unique().tolist()
+        # 判斷哪一層是 ticker
+        ohlcv = {"Open", "High", "Low", "Close", "Volume"}
+        if set(lvl0) & ohlcv:          # level0 = OHLCV → level1 = ticker
+            ticker_level = 1
+        else:                           # level0 = ticker → level1 = OHLCV
+            ticker_level = 0
+    else:
+        ticker_level = None
+
+    for ticker in tickers:
+        try:
+            if ticker_level is None:
+                df = raw.copy()
+            elif ticker_level == 1:
+                if ticker not in raw.columns.get_level_values(1):
+                    continue
+                df = raw.xs(ticker, axis=1, level=1).copy()
+            else:
+                if ticker not in raw.columns.get_level_values(0):
+                    continue
+                df = raw.xs(ticker, axis=1, level=0).copy()
+
+            df = flatten_columns(df)
+            df = normalize_index(df)
+            df = df.dropna(subset=["Close"])
+            if len(df) < 60:
+                continue
+            cache[ticker] = calculate_indicators(df)
+        except Exception:
+            continue
+    return cache
+
+# ── TradingView Screener ──────────────────────────────────────────
 TV_URL = "https://scanner.tradingview.com/hongkong/scan"
 TV_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
@@ -31,59 +179,30 @@ def fetch_stocks_from_tradingview(min_cap_hkd: int = 10_000_000_000) -> list:
         "symbols": {"query": {"types": ["stock"]}, "tickers": []},
         "columns": ["name", "description", "close", "market_cap_basic", "earnings_per_share_basic_ttm"],
         "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
-        "range": [0, 500]
+        "range": [0, 500],
     }
     resp = requests.post(TV_URL, headers=TV_HEADERS, json=payload, timeout=20)
     resp.raise_for_status()
-    rows = resp.json().get("data", [])
     tickers = []
-    for row in rows:
+    for row in resp.json().get("data", []):
         d = row.get("d", [])
-        if not d: continue
+        if not d:
+            continue
         try:
             tickers.append(f"{int(d[0]):04d}.HK")
         except (ValueError, TypeError):
             continue
     return tickers
 
-# ══════════════════════════════════════════════════════════════════
-# 批量下載核心 — 一次下載全部股票，存入 session_state cache
-# ══════════════════════════════════════════════════════════════════
-def batch_download(tickers: list, period: str = "1y") -> dict:
-    """
-    用 yf.download(list) 一次過下載所有 tickers，
-    回傳 {ticker: DataFrame} 字典，已計算好 indicators。
-    比逐隻下載快 ~10x。
-    """
-    cache = {}
-    # yf.download 支援 list，回傳 MultiIndex columns: (OHLCV, Ticker)
-    raw = yf.download(
-        tickers, period=period,
-        progress=False, auto_adjust=True,
-        group_by="ticker", threads=True
-    )
-    if raw.empty:
-        return cache
-
-    for ticker in tickers:
-        try:
-            # 多 ticker 時是 MultiIndex，單 ticker 時是普通 columns
-            if isinstance(raw.columns, pd.MultiIndex):
-                if ticker not in raw.columns.get_level_values(1):
-                    continue
-                df = raw.xs(ticker, axis=1, level=1).copy()
-            else:
-                df = raw.copy()
-
-            df.columns = [str(c).strip() for c in df.columns]
-            df.index   = pd.to_datetime(df.index).tz_localize(None)
-            df = df.dropna(subset=["Close"])
-            if len(df) < 60:
-                continue
-            cache[ticker] = calculate_indicators(df)
-        except Exception:
-            continue
-    return cache
+# ── Cache 助手 ────────────────────────────────────────────────────
+def get_cached(ticker: str) -> pd.DataFrame:
+    cache = st.session_state.get("stock_cache", {})
+    if ticker in cache:
+        return cache[ticker]
+    df = get_stock_data(ticker)
+    if not df.empty:
+        return calculate_indicators(df)
+    return pd.DataFrame()
 
 def get_cache_label() -> str:
     ts = st.session_state.get("cache_time")
@@ -92,22 +211,91 @@ def get_cache_label() -> str:
         return f"✅ 已緩存 {n} 隻｜{ts}"
     return "⚠️ 尚未緩存"
 
+def cache_banner():
+    cache = st.session_state.get("stock_cache", {})
+    if cache:
+        ts = st.session_state.get("cache_time", "")
+        st.success(f"⚡ 使用緩存數據（{len(cache)} 隻，{ts} 下載）— 掃描將在數秒內完成", icon="🚀")
+    else:
+        st.warning(
+            "⚠️ 尚未緩存數據，掃描將逐隻下載（較慢）。"
+            "建議先點擊左側 **⬇️ 批量下載全部股票** 再掃描！",
+            icon="🐢",
+        )
+
+# ── 繪圖 ──────────────────────────────────────────────────────────
+def show_scan_metrics(results):
+    cols_per_row = 4
+    for row_start in range(0, len(results), cols_per_row):
+        chunk = results[row_start: row_start + cols_per_row]
+        cols  = st.columns(cols_per_row)
+        for col, r in zip(cols, chunk):
+            pct       = r["漲跌%"]
+            arrow     = "🟢 ▲" if pct >= 0 else "🔴 ▼"
+            delta_str = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+            col.metric(label=f"{arrow} {r['代碼']}", value=f"${r['現價']:.2f}", delta=delta_str)
+
+def show_chart(ticker: str, df: pd.DataFrame):
+    fig = make_subplots(
+        rows=4, cols=1, shared_xaxes=True,
+        vertical_spacing=0.03,
+        row_heights=[0.4, 0.15, 0.2, 0.2],
+    )
+    fig.add_trace(go.Candlestick(
+        x=df.index, open=df["Open"], high=df["High"],
+        low=df["Low"], close=df["Close"],
+        increasing_line_color="#26a69a", decreasing_line_color="#ef5350", name="K線",
+    ), row=1, col=1)
+
+    for ma, color in zip(["MA5", "MA20", "MA60"], ["gray", "purple", "orange"]):
+        fig.add_trace(go.Scatter(x=df.index, y=df[ma], name=ma,
+                                 line=dict(width=1, color=color)), row=1, col=1)
+
+    fig.add_trace(go.Scatter(x=df.index, y=df["BB_upper"], name="BB上",
+        line=dict(width=1, color="rgba(100,180,255,0.6)", dash="dot")), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df["BB_lower"], name="BB下",
+        line=dict(width=1, color="rgba(100,180,255,0.6)", dash="dot"),
+        fill="tonexty", fillcolor="rgba(100,180,255,0.05)"), row=1, col=1)
+
+    v_colors = ["#26a69a" if c >= o else "#ef5350" for c, o in zip(df["Close"], df["Open"])]
+    fig.add_trace(go.Bar(x=df.index, y=df["Volume"], marker_color=v_colors, name="成交量"), row=2, col=1)
+
+    h_colors = ["#26a69a" if v >= 0 else "#ef5350" for v in df["MACD_Hist"]]
+    fig.add_trace(go.Bar(x=df.index, y=df["MACD_Hist"], marker_color=h_colors, name="MACD柱"), row=3, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df["DIF"], line=dict(color="#f9a825", width=1), name="DIF"), row=3, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df["DEA"], line=dict(color="#42a5f5", width=1), name="DEA"), row=3, col=1)
+
+    fig.add_trace(go.Scatter(x=df.index, y=df["K"],   line=dict(color="#f9a825", width=1), name="K"), row=4, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df["D"],   line=dict(color="#42a5f5", width=1), name="D"), row=4, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df["J"],   line=dict(color="#ab47bc", width=1), name="J"), row=4, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], line=dict(color="#ff7043", width=1.5, dash="dot"), name="RSI"), row=4, col=1)
+    for lvl, clr in [(30, "rgba(38,166,154,0.4)"), (70, "rgba(239,83,80,0.4)")]:
+        fig.add_hline(y=lvl, line_dash="dot", line_color=clr, row=4, col=1)
+
+    fig.update_layout(
+        height=700, showlegend=False,
+        xaxis_rangeslider_visible=False,
+        margin=dict(t=10, b=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
 # ══════════════════════════════════════════════════════════════════
-# Sidebar
+# ② Sidebar（所有函數已定義，安全呼叫）
 # ══════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.markdown("### ⚙️ 數據控制台")
-
-    # 股票清單狀態
     n_stocks = len(st.session_state.get("stocks", []))
     st.caption(f"股票清單：{n_stocks or '讀取中'} 隻")
+
     if st.button("🔄 更新清單 (TradingView)"):
         with st.spinner("篩選中：主要上市｜市值>100億｜EPS>0..."):
             try:
                 new_stocks = fetch_stocks_from_tradingview()
                 if new_stocks:
                     st.session_state["stocks"] = new_stocks
-                    st.session_state.pop("stock_cache", None)   # 清舊 cache
+                    st.session_state.pop("stock_cache", None)
                     st.session_state.pop("cache_time", None)
                     st.success(f"✅ 已更新！共 {len(new_stocks)} 隻")
                     st.rerun()
@@ -117,29 +305,25 @@ with st.sidebar:
                 st.error(f"❌ 失敗：{e}")
 
     st.divider()
-
-    # ── 批量下載按鈕 ──────────────────────────────────────────
     st.markdown("### 🚀 批量下載數據")
     st.caption(get_cache_label())
     cache_period = st.selectbox("下載週期", ["6mo", "1y", "2y"], index=1, key="cache_period")
 
     if st.button("⬇️ 批量下載全部股票", type="primary"):
-        stocks_to_dl = st.session_state.get("stocks", load_stocks_from_file())
+        stocks_to_dl = st.session_state.get("stocks") or load_stocks_from_file()
         if not stocks_to_dl:
             st.warning("請先載入股票清單")
         else:
-            prog  = st.progress(0, text="準備下載...")
-            # 分批處理避免單次請求過大（每批 20 隻）
             batch_size = 20
             all_cache  = {}
             batches    = [stocks_to_dl[i:i+batch_size] for i in range(0, len(stocks_to_dl), batch_size)]
+            prog = st.progress(0, text="準備下載...")
             for bi, batch in enumerate(batches):
                 prog.progress(
                     (bi + 1) / len(batches),
-                    text=f"下載第 {bi+1}/{len(batches)} 批（每批 {batch_size} 隻）..."
+                    text=f"下載第 {bi+1}/{len(batches)} 批（每批 {batch_size} 隻）...",
                 )
                 all_cache.update(batch_download(batch, period=cache_period))
-
             prog.empty()
             st.session_state["stock_cache"] = all_cache
             st.session_state["cache_time"]  = datetime.now().strftime("%H:%M")
@@ -149,228 +333,28 @@ with st.sidebar:
     if st.session_state.get("stock_cache"):
         if st.button("🗑️ 清除緩存"):
             st.session_state.pop("stock_cache", None)
-            st.session_state.pop("cache_time",  None)
+            st.session_state.pop("cache_time", None)
             st.rerun()
 
 # ══════════════════════════════════════════════════════════════════
-# 1. 核心數據抓取（個股用，非掃描）
+# ③ 主 UI
 # ══════════════════════════════════════════════════════════════════
-def load_stocks_from_file() -> list:
-    if os.path.exists("stocks.txt"):
-        stocks = [line.split("#")[0].strip() for line in open("stocks.txt", "r") if ".HK" in line]
-        if stocks:
-            return stocks
-    return ["0700.HK", "9988.HK", "3690.HK"]
-
-def get_stock_data(ticker, period="1y"):
-    try:
-        if ticker == "^HSTECH":
-            df = yf.download("800700.HK", period=period, progress=False, auto_adjust=True)
-            if df.empty: df = yf.download("^HSTECH", period=period, progress=False, auto_adjust=True)
-            if df.empty: df = yf.download("3032.HK",  period=period, progress=False, auto_adjust=True)
-        elif ticker == "^HSI":
-            df = yf.download("^HSI", period=period, progress=False, auto_adjust=True)
-            if df.empty: df = yf.download("2800.HK", period=period, progress=False, auto_adjust=True)
-        else:
-            df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
-
-        if df.empty: return pd.DataFrame()
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = [col[0] for col in df.columns]
-        df.columns = [str(c).strip() for c in df.columns]
-        df.index   = pd.to_datetime(df.index).tz_localize(None)
-        return df.dropna(subset=["Close"])
-    except Exception:
-        return pd.DataFrame()
-
-
-# --- 2. 指標計算函數 ---
-def calculate_indicators(df):
-    df = df.copy()
-    df['MA5']  = df['Close'].rolling(5).mean()
-    df['MA10'] = df['Close'].rolling(10).mean()
-    df['MA20'] = df['Close'].rolling(20).mean()
-    df['MA60'] = df['Close'].rolling(60).mean()
-
-    exp1 = df['Close'].ewm(span=12, adjust=False).mean()
-    exp2 = df['Close'].ewm(span=26, adjust=False).mean()
-    df['DIF'] = exp1 - exp2
-    df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
-    df['MACD_Hist'] = df['DIF'] - df['DEA']
-
-    low_list  = df['Low'].rolling(9).min()
-    high_list = df['High'].rolling(9).max()
-    denom = high_list - low_list
-    denom = denom.replace(0, 1)  # 防止除以零
-    rsv = (df['Close'] - low_list) / denom * 100
-    df['K'] = rsv.ewm(com=2, adjust=False).mean()
-    df['D'] = df['K'].ewm(com=2, adjust=False).mean()
-    df['J'] = 3 * df['K'] - 2 * df['D']
-
-    # 布林帶 (Bollinger Bands, 20日, 2σ)
-    bb_mid         = df['Close'].rolling(20).mean()
-    bb_std         = df['Close'].rolling(20).std()
-    df['BB_upper'] = bb_mid + 2 * bb_std
-    df['BB_mid']   = bb_mid
-    df['BB_lower'] = bb_mid - 2 * bb_std
-
-    # RSI (14日) — 經典超買超賣，與 KDJ 互補
-    delta   = df['Close'].diff()
-    gain    = delta.clip(lower=0).rolling(14).mean()
-    loss    = (-delta.clip(upper=0)).rolling(14).mean()
-    rs      = gain / loss.replace(0, 1e-9)
-    df['RSI'] = 100 - (100 / (1 + rs))
-
-    return df
-
-# --- 3. Cache 讀取助手 ---
-def get_cached(ticker) -> pd.DataFrame:
-    """先從 session_state cache 讀，沒有才單獨 download（fallback）"""
-    cache = st.session_state.get("stock_cache", {})
-    if ticker in cache:
-        return cache[ticker]
-    df = get_stock_data(ticker)
-    if not df.empty:
-        return calculate_indicators(df)
-    return pd.DataFrame()
-
-def cache_banner():
-    """在掃描 Tab 頂部顯示緩存狀態提示"""
-    cache = st.session_state.get("stock_cache", {})
-    if cache:
-        ts = st.session_state.get("cache_time", "")
-        st.success(f"⚡ 使用緩存數據（{len(cache)} 隻，{ts} 下載）— 掃描將在數秒內完成", icon="🚀")
-    else:
-        st.warning(
-            "⚠️ 尚未緩存數據，掃描將逐隻下載（較慢）。"
-            "建議先點擊左側 **⬇️ 批量下載全部股票** 再掃描！",
-            icon="🐢"
-        )
-
-# --- 掃描結果 Metric 卡片 ---
-def show_scan_metrics(results):
-    """在表格上方顯示每個標的的現價 + 漲跌% 卡片"""
-    cols_per_row = 4
-    for row_start in range(0, len(results), cols_per_row):
-        chunk = results[row_start: row_start + cols_per_row]
-        cols = st.columns(cols_per_row)
-        for col, r in zip(cols, chunk):
-            pct = r['漲跌%']
-            arrow = "🟢 ▲" if pct >= 0 else "🔴 ▼"
-            delta_str = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
-            col.metric(
-                label=f"{arrow} {r['代碼']}",
-                value=f"${r['現價']:.2f}",
-                delta=delta_str,
-            )
-
-# --- 4. 繪圖（綠漲紅跌）---
-def show_chart(ticker, df):
-    fig = make_subplots(
-        rows=4, cols=1, shared_xaxes=True,
-        vertical_spacing=0.03,
-        row_heights=[0.4, 0.15, 0.2, 0.2]
-    )
-
-    fig.add_trace(go.Candlestick(
-        x=df.index, open=df['Open'], high=df['High'],
-        low=df['Low'], close=df['Close'],
-        increasing_line_color='#26a69a',
-        decreasing_line_color='#ef5350',
-        name='K線'
-    ), row=1, col=1)
-
-    for ma, col in zip(['MA5', 'MA20', 'MA60'], ['gray', 'purple', 'orange']):
-        fig.add_trace(go.Scatter(
-            x=df.index, y=df[ma], name=ma,
-            line=dict(width=1, color=col)
-        ), row=1, col=1)
-
-    # 布林帶
-    fig.add_trace(go.Scatter(x=df.index, y=df['BB_upper'], name='BB上',
-        line=dict(width=1, color='rgba(100,180,255,0.6)', dash='dot')), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['BB_lower'], name='BB下',
-        line=dict(width=1, color='rgba(100,180,255,0.6)', dash='dot'),
-        fill='tonexty', fillcolor='rgba(100,180,255,0.05)'), row=1, col=1)
-
-    colors = ['#26a69a' if c >= o else '#ef5350'
-              for c, o in zip(df['Close'], df['Open'])]
-    fig.add_trace(go.Bar(
-        x=df.index, y=df['Volume'],
-        marker_color=colors, name='成交量'
-    ), row=2, col=1)
-
-    h_colors = ['#26a69a' if v >= 0 else '#ef5350' for v in df['MACD_Hist']]
-    fig.add_trace(go.Bar(
-        x=df.index, y=df['MACD_Hist'],
-        marker_color=h_colors, name='MACD'
-    ), row=3, col=1)
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df['DIF'],
-        line=dict(color='#f9a825', width=1), name='DIF'
-    ), row=3, col=1)
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df['DEA'],
-        line=dict(color='#42a5f5', width=1), name='DEA'
-    ), row=3, col=1)
-
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df['K'],
-        line=dict(color='#f9a825', width=1), name='K'
-    ), row=4, col=1)
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df['D'],
-        line=dict(color='#42a5f5', width=1), name='D'
-    ), row=4, col=1)
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df['J'],
-        line=dict(color='#ab47bc', width=1), name='J'
-    ), row=4, col=1)
-    # RSI 疊加在 row4（右軸）
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df['RSI'],
-        line=dict(color='#ff7043', width=1.5, dash='dot'), name='RSI'
-    ), row=4, col=1)
-    # 超買/超賣參考線
-    for lvl, color in [(30, 'rgba(38,166,154,0.4)'), (70, 'rgba(239,83,80,0.4)')]:
-        fig.add_hline(y=lvl, line_dash='dot', line_color=color, row=4, col=1)
-
-    fig.update_layout(
-        height=700, showlegend=False,
-        xaxis_rangeslider_visible=False,
-        margin=dict(t=10, b=10),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)'
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-# --- 5. 載入股票清單（優先用 session_state，其次 stocks.txt）---
-def load_stocks():
-    if "stocks" in st.session_state and st.session_state["stocks"]:
-        return st.session_state["stocks"]
-    stocks = load_stocks_from_file()
-    st.session_state["stocks"] = stocks
-    return stocks
-
 STOCKS = load_stocks()
-
-# --- 6. 主程式 UI ---
-st.title("🏹 港股狙擊手 V9.1")
-
+st.title("🏹 港股狙擊手 V9.1.1")
 tabs = st.tabs(["🌍 指數", "🏆 跑贏大市", "🟢 買入掃描", "🔴 賣出掃描", "🔍 分析"])
 
-# ===================== TAB 0：指數 =====================
+# ── TAB 0：指數 ───────────────────────────────────────────────────
 with tabs[0]:
     st.subheader("🌍 主要指數走勢")
     indices = {
-        "恆生指數 (^HSI)": "^HSI",
+        "恆生指數 (^HSI)":    "^HSI",
         "恆生科技 (^HSTECH)": "^HSTECH",
-        "恐慌指數 (^VIX)": "^VIX",
+        "恐慌指數 (^VIX)":    "^VIX",
     }
     col1, col2 = st.columns([1, 3])
     with col1:
-        selected_index = st.selectbox("選擇指數", list(indices.keys()))
-        period = st.selectbox("時間週期", ["3mo", "6mo", "1y", "2y"], index=2)
+        selected_index  = st.selectbox("選擇指數", list(indices.keys()))
+        period          = st.selectbox("時間週期", ["3mo", "6mo", "1y", "2y"], index=2)
     with col2:
         ticker_code = indices[selected_index]
         with st.spinner(f"載入 {selected_index} 數據中..."):
@@ -381,75 +365,69 @@ with tabs[0]:
             df_idx = calculate_indicators(df_idx)
             show_chart(ticker_code, df_idx)
 
-# ===================== TAB 1：跑贏大市 =====================
+# ── TAB 1：跑贏大市 ───────────────────────────────────────────────
 with tabs[1]:
-    st.subheader("🏆 跑贏大市排行")
+    st.subheader("🏆 跑贏大市排行（僅顯示強勢股）")
     cache_banner()
 
     period_options = {
-        "1日 (1d)": 2,
-        "1週 (1w)": 6,
-        "1個月 (1mo)": 22,
-        "3個月 (3mo)": 63,
-        "6個月 (6mo)": 126
+        "1日":   2,
+        "1週":   6,
+        "1個月": 22,
+        "3個月": 63,
+        "6個月": 126,
     }
     period_beat = st.selectbox("比較週期", list(period_options.keys()), index=2, key="beat_period")
 
     if st.button("📊 開始計算跑贏大市"):
-        with st.spinner("正在比較各股與恆指表現..."):
-            lb = period_options[period_beat]
-            df_hsi = get_stock_data("^HSI", period="6mo")
-            if df_hsi.empty:
-                st.error("無法取得恆指數據")
-            else:
-                start_idx_hsi = -lb if len(df_hsi) >= lb else 0
-                hsi_ret = (df_hsi['Close'].iloc[-1] - df_hsi['Close'].iloc[start_idx_hsi]) / df_hsi['Close'].iloc[start_idx_hsi] * 100
+        lb     = period_options[period_beat]
+        df_hsi = get_stock_data("^HSI", period="6mo")
+        if df_hsi.empty:
+            st.error("無法取得恆指數據")
+        else:
+            si      = -lb if len(df_hsi) >= lb else 0
+            hsi_ret = (df_hsi["Close"].iloc[-1] - df_hsi["Close"].iloc[si]) / df_hsi["Close"].iloc[si] * 100
 
-                results = []
-                pbar = st.progress(0)
-                for i, s in enumerate(STOCKS):
-                    pbar.progress((i + 1) / len(STOCKS))
-                    df_s = get_cached(s)
-                    if df_s.empty or len(df_s) < 2:
-                        continue
-                    start_idx_s = -lb if len(df_s) >= lb else 0
-                    stock_ret   = (df_s['Close'].iloc[-1] - df_s['Close'].iloc[start_idx_s]) / df_s['Close'].iloc[start_idx_s] * 100
-                    excess      = stock_ret - hsi_ret
-                    results.append({
-                        "代碼":      s,
-                        "現價":      round(float(df_s['Close'].iloc[-1]), 2),
-                        "股票升幅%": stock_ret,
-                        "恆指升幅%": hsi_ret,
-                        "超額回報%": excess,
-                    })
-                pbar.empty()
+            results = []
+            pbar    = st.progress(0)
+            for i, s in enumerate(STOCKS):
+                pbar.progress((i + 1) / len(STOCKS))
+                df_s = get_cached(s)
+                if df_s.empty or len(df_s) < 2:
+                    continue
+                si_s      = -lb if len(df_s) >= lb else 0
+                stock_ret = (df_s["Close"].iloc[-1] - df_s["Close"].iloc[si_s]) / df_s["Close"].iloc[si_s] * 100
+                results.append({
+                    "代碼":      s,
+                    "現價":      round(float(df_s["Close"].iloc[-1]), 2),
+                    "股票升幅%": stock_ret,
+                    "恆指升幅%": hsi_ret,
+                    "超額回報%": stock_ret - hsi_ret,
+                })
+            pbar.empty()
 
-                if results:
-                    df_res = pd.DataFrame(results)
-                    df_res = df_res[df_res["超額回報%"] > 0].sort_values("超額回報%", ascending=False)
-                    if not df_res.empty:
-                        st.success(f"✅ 成功篩選出 {len(df_res)} 隻跑贏大市的股票，期間恆指回報：{hsi_ret:.2f}%")
-                        styled_df = df_res.style.format({
-                            "現價": "${:.2f}",
-                            "股票升幅%": "{:+.2f}%",
-                            "恆指升幅%": "{:+.2f}%",
-                            "超額回報%": "{:+.2f}%"
-                        }).map(
-                            lambda x: 'color: #26a69a' if x > 0 else ('color: #ef5350' if x < 0 else ''),
-                            subset=['股票升幅%', '超額回報%']
-                        )
-                        st.dataframe(styled_df, use_container_width=True)
-                    else:
-                        st.warning(f"⚠️ 在此期間內，你的清單中沒有任何股票跑贏大市 (期間恆指回報：{hsi_ret:.2f}%)。")
+            if results:
+                df_res = pd.DataFrame(results)
+                df_res = df_res[df_res["超額回報%"] > 0].sort_values("超額回報%", ascending=False)
+                if not df_res.empty:
+                    st.success(f"✅ {len(df_res)} 隻跑贏大市，恆指回報：{hsi_ret:.2f}%")
+                    st.dataframe(df_res.style.format({
+                        "現價": "${:.2f}",
+                        "股票升幅%": "{:+.2f}%",
+                        "恆指升幅%": "{:+.2f}%",
+                        "超額回報%": "{:+.2f}%",
+                    }).map(
+                        lambda x: "color:#26a69a" if x > 0 else ("color:#ef5350" if x < 0 else ""),
+                        subset=["股票升幅%", "超額回報%"],
+                    ), use_container_width=True)
                 else:
-                    st.warning("無法取得足夠數據")
+                    st.warning(f"⚠️ 沒有股票跑贏大市（恆指回報：{hsi_ret:.2f}%）")
 
-# ===================== TAB 2：買入掃描 =====================
+# ── TAB 2：買入掃描 ───────────────────────────────────────────────
 with tabs[2]:
     st.subheader("🟢 買入策略掃描")
     cache_banner()
 
-    # ── 策略組合建議 ──────────────────────────────────────────
     with st.expander("💡 策略組合建議（點擊展開）", expanded=True):
         st.markdown("""
         > 勾選**多個策略**可提高訊號可靠度（條件越多 = 越嚴格）。以下是經實戰驗證的黃金組合：
@@ -487,66 +465,63 @@ with tabs[2]:
             results, hits_dfs = [], {}
             pbar   = st.progress(0)
             status = st.empty()
-
             for i, s in enumerate(STOCKS):
                 pbar.progress((i + 1) / len(STOCKS))
                 status.text(f"正在分析 {s}...")
                 df = get_cached(s)
                 if df.empty or len(df) < 60:
                     continue
-                df = calculate_indicators(df)
                 c, p    = df.iloc[-1], df.iloc[-2]
-                vol_avg = df['Volume'].rolling(20).mean().iloc[-1]
+                vol_avg = df["Volume"].rolling(20).mean().iloc[-1]
 
                 checks = []
-                if b1:  # 突破阻力+放量
-                    resist = df['High'].iloc[-21:-1].max()
-                    checks.append(bool(c['Close'] > resist) and bool(c['Volume'] > vol_avg * 1.5))
-                if b2:  # MA5 金叉 MA20
-                    checks.append(bool(c['MA5'] > c['MA20']) and bool(p['MA5'] <= p['MA20']))
-                if b3:  # 底背離
-                    price_low = df['Close'].iloc[-20:].min()
-                    dif_low   = df['DIF'].iloc[-20:].min()
-                    checks.append(bool(c['Close'] <= price_low * 1.005) and bool(c['DIF'] > dif_low * 1.01))
-                if b4:  # KDJ 超賣
-                    checks.append(bool(c['J'] < 10))
-                if b5:  # 缺口低開
-                    checks.append(bool(c['Open'] < p['Low']))
-                if b6:  # 底部形態突破
-                    was_below = bool(df['Close'].iloc[-10:-1].mean() < df['MA60'].iloc[-10:-1].mean())
-                    checks.append(was_below and bool(c['Close'] > c['MA20']) and
-                                  bool(p['Close'] <= p['MA20']) and bool(c['Volume'] > vol_avg * 1.3))
-                if b7:  # 布林帶下軌
-                    checks.append(bool(c['Close'] < c['BB_lower']))
-                if b8:  # RSI 超賣
-                    checks.append(bool(c['RSI'] < 30))
-                if b9:  # MACD 金叉
-                    checks.append(bool(c['DIF'] > c['DEA']) and bool(p['DIF'] <= p['DEA']))
+                if b1:
+                    resist = df["High"].iloc[-21:-1].max()
+                    checks.append(bool(c["Close"] > resist) and bool(c["Volume"] > vol_avg * 1.5))
+                if b2:
+                    checks.append(bool(c["MA5"] > c["MA20"]) and bool(p["MA5"] <= p["MA20"]))
+                if b3:
+                    pl = df["Close"].iloc[-20:].min()
+                    dl = df["DIF"].iloc[-20:].min()
+                    checks.append(bool(c["Close"] <= pl * 1.005) and bool(c["DIF"] > dl * 1.01))
+                if b4:
+                    checks.append(bool(c["J"] < 10))
+                if b5:
+                    checks.append(bool(c["Open"] < p["Low"]))
+                if b6:
+                    was_below = bool(df["Close"].iloc[-10:-1].mean() < df["MA60"].iloc[-10:-1].mean())
+                    checks.append(was_below and bool(c["Close"] > c["MA20"]) and
+                                  bool(p["Close"] <= p["MA20"]) and bool(c["Volume"] > vol_avg * 1.3))
+                if b7:
+                    checks.append(bool(c["Close"] < c["BB_lower"]))
+                if b8:
+                    checks.append(bool(c["RSI"] < 30))
+                if b9:
+                    checks.append(bool(c["DIF"] > c["DEA"]) and bool(p["DIF"] <= p["DEA"]))
 
                 if checks and all(checks):
-                    pct      = ((c['Close'] - p['Close']) / p['Close']) * 100
-                    bb_range = c['BB_upper'] - c['BB_lower']
-                    bb_pct   = ((c['Close'] - c['BB_lower']) / bb_range * 100) if bb_range > 0 else 50
+                    pct      = ((c["Close"] - p["Close"]) / p["Close"]) * 100
+                    bb_range = c["BB_upper"] - c["BB_lower"]
+                    bb_pct   = (c["Close"] - c["BB_lower"]) / bb_range * 100 if bb_range > 0 else 50
                     results.append({
                         "代碼":   s,
-                        "現價":   round(float(c['Close']), 2),
+                        "現價":   round(float(c["Close"]), 2),
                         "漲跌%":  round(float(pct), 2),
-                        "RSI":    round(float(c['RSI']), 1),
-                        "J值":    round(float(c['J']), 1),
+                        "RSI":    round(float(c["RSI"]), 1),
+                        "J值":    round(float(c["J"]), 1),
                         "BB位置": f"{bb_pct:.0f}%",
                     })
                     hits_dfs[s] = df
 
             status.empty(); pbar.empty()
-
             if results:
                 st.success(f"✅ 發現 {len(results)} 個買入標的")
                 show_scan_metrics(results)
                 st.divider()
                 df_show = pd.DataFrame(results)
-                df_show['現價']  = df_show['現價'].map(lambda x: f"{x:.2f}")
-                df_show['漲跌%'] = df_show['漲跌%'].map(lambda x: f"{'+' if x>=0 else ''}{x:.2f}%")
-                df_show['J值']   = df_show['J值'].map(lambda x: f"{x:.1f}")
+                df_show["現價"]  = df_show["現價"].map(lambda x: f"{x:.2f}")
+                df_show["漲跌%"] = df_show["漲跌%"].map(lambda x: f"{'+' if x>=0 else ''}{x:.2f}%")
+                df_show["J值"]   = df_show["J值"].map(lambda x: f"{x:.1f}")
                 st.dataframe(df_show, use_container_width=True)
                 for s in hits_dfs:
                     st.write(f"### 🎯 {s}")
@@ -554,12 +529,11 @@ with tabs[2]:
             else:
                 st.warning("⚠️ 沒有符合條件的股票，請嘗試減少勾選的條件數量。")
 
-# ===================== TAB 3：賣出掃描 =====================
+# ── TAB 3：賣出掃描 ───────────────────────────────────────────────
 with tabs[3]:
     st.subheader("🔴 賣出 / 做空策略掃描")
     cache_banner()
 
-    # ── 策略組合建議 ──────────────────────────────────────────
     with st.expander("💡 策略組合建議（點擊展開）", expanded=True):
         st.markdown("""
         > 勾選**多個策略**可提高訊號可靠度。以下是經實戰驗證的黃金組合：
@@ -574,19 +548,19 @@ with tabs[3]:
 
         **⚠️ 不建議組合：**
         - ⑤ 缺口高開 ＋ ⑧ 放量急跌 → 兩個條件同時觸發概率極低
-        - ⑨ RSI超買 單獨使用在強勢行情 → 強趨勢中 RSI 可長期在高位，需配合形態
+        - ⑨ RSI超買 單獨在強勢行情使用 → 強趨勢中 RSI 可長期高位，需配合形態
         """)
 
     st.caption("勾選一個或多個策略（多個條件需同時符合）")
     col_c, col_d = st.columns(2)
-    s1 = col_c.checkbox("⑤ 缺口高開回補做空",             help="今日開盤高於昨日最高（跳空高開），短期大概率回補")
-    s2 = col_c.checkbox("⑥ 頭部形態跌破 MA20（放量）",    help="近期均線高位，今日放量跌破 MA20，頭部確認")
-    s3 = col_c.checkbox("⑦ 布林帶上軌賣出",               help="收盤突破布林帶上軌，均值回歸賣點")
-    s4 = col_c.checkbox("⑧ 上漲縮量（警惕頂部）",         help="價格創10日新高，但成交量萎縮（量能不足，假突破）")
-    s5 = col_d.checkbox("⑧ 放量急跌（跟進做空）",          help="收盤跌幅 > 2%，且成交量 > 20日均量 1.5 倍")
-    s6 = col_d.checkbox("② MA5 死叉 MA20",               help="5日均線今日下穿20日均線（趨勢轉弱）")
-    s7 = col_d.checkbox("⑨ RSI 超買（RSI > 70）",        help="RSI 高於 70，超買區間。比 KDJ 穩定，回調概率高")
-    s8 = col_d.checkbox("⑩ MACD 死叉（DIF下穿DEA）",     help="DIF 今日下穿 DEA，動能由強轉弱，中線出場訊號")
+    s1 = col_c.checkbox("⑤ 缺口高開回補做空",           help="今日開盤高於昨日最高（跳空高開），短期大概率回補")
+    s2 = col_c.checkbox("⑥ 頭部形態跌破 MA20（放量）",  help="近期均線高位，今日放量跌破 MA20，頭部確認")
+    s3 = col_c.checkbox("⑦ 布林帶上軌賣出",             help="收盤突破布林帶上軌，均值回歸賣點")
+    s4 = col_c.checkbox("⑧ 上漲縮量（警惕頂部）",       help="價格創10日新高，但成交量萎縮（量能不足，假突破）")
+    s5 = col_d.checkbox("⑧ 放量急跌（跟進做空）",        help="收盤跌幅 > 2%，且成交量 > 20日均量 1.5 倍")
+    s6 = col_d.checkbox("② MA5 死叉 MA20",             help="5日均線今日下穿20日均線（趨勢轉弱）")
+    s7 = col_d.checkbox("⑨ RSI 超買（RSI > 70）",      help="RSI 高於 70，超買區間。比 KDJ 穩定，回調概率高")
+    s8 = col_d.checkbox("⑩ MACD 死叉（DIF下穿DEA）",   help="DIF 今日下穿 DEA，動能由強轉弱，中線出場訊號")
 
     if st.button("🔴 開始掃描賣點"):
         if not any([s1, s2, s3, s4, s5, s6, s7, s8]):
@@ -595,63 +569,60 @@ with tabs[3]:
             results, hits_dfs = [], {}
             pbar   = st.progress(0)
             status = st.empty()
-
             for i, ticker in enumerate(STOCKS):
                 pbar.progress((i + 1) / len(STOCKS))
                 status.text(f"正在分析 {ticker}...")
                 df = get_cached(ticker)
                 if df.empty or len(df) < 60:
                     continue
-                df = calculate_indicators(df)
                 c, p    = df.iloc[-1], df.iloc[-2]
-                vol_avg = df['Volume'].rolling(20).mean().iloc[-1]
+                vol_avg = df["Volume"].rolling(20).mean().iloc[-1]
 
                 checks = []
-                if s1:  # 缺口高開
-                    checks.append(bool(c['Open'] > p['High']))
-                if s2:  # 頭部破位 MA20
-                    was_above = bool(df['Close'].iloc[-10:-1].mean() > df['MA60'].iloc[-10:-1].mean())
-                    checks.append(was_above and bool(c['Close'] < c['MA20']) and
-                                  bool(p['Close'] >= p['MA20']) and bool(c['Volume'] > vol_avg * 1.3))
-                if s3:  # 布林帶上軌
-                    checks.append(bool(c['Close'] > c['BB_upper']))
-                if s4:  # 上漲縮量
-                    price_high = df['Close'].iloc[-10:].max()
-                    checks.append(bool(c['Close'] >= price_high * 0.995) and bool(c['Volume'] < vol_avg * 0.6))
-                if s5:  # 放量急跌
-                    pct_chg = (c['Close'] - p['Close']) / p['Close'] * 100
-                    checks.append(bool(pct_chg < -2) and bool(c['Volume'] > vol_avg * 1.5))
-                if s6:  # 死叉
-                    checks.append(bool(c['MA5'] < c['MA20']) and bool(p['MA5'] >= p['MA20']))
-                if s7:  # RSI 超買
-                    checks.append(bool(c['RSI'] > 70))
-                if s8:  # MACD 死叉
-                    checks.append(bool(c['DIF'] < c['DEA']) and bool(p['DIF'] >= p['DEA']))
+                if s1:
+                    checks.append(bool(c["Open"] > p["High"]))
+                if s2:
+                    was_above = bool(df["Close"].iloc[-10:-1].mean() > df["MA60"].iloc[-10:-1].mean())
+                    checks.append(was_above and bool(c["Close"] < c["MA20"]) and
+                                  bool(p["Close"] >= p["MA20"]) and bool(c["Volume"] > vol_avg * 1.3))
+                if s3:
+                    checks.append(bool(c["Close"] > c["BB_upper"]))
+                if s4:
+                    ph = df["Close"].iloc[-10:].max()
+                    checks.append(bool(c["Close"] >= ph * 0.995) and bool(c["Volume"] < vol_avg * 0.6))
+                if s5:
+                    pct_chg = (c["Close"] - p["Close"]) / p["Close"] * 100
+                    checks.append(bool(pct_chg < -2) and bool(c["Volume"] > vol_avg * 1.5))
+                if s6:
+                    checks.append(bool(c["MA5"] < c["MA20"]) and bool(p["MA5"] >= p["MA20"]))
+                if s7:
+                    checks.append(bool(c["RSI"] > 70))
+                if s8:
+                    checks.append(bool(c["DIF"] < c["DEA"]) and bool(p["DIF"] >= p["DEA"]))
 
                 if checks and all(checks):
-                    pct      = ((c['Close'] - p['Close']) / p['Close']) * 100
-                    bb_range = c['BB_upper'] - c['BB_lower']
-                    bb_pct   = ((c['Close'] - c['BB_lower']) / bb_range * 100) if bb_range > 0 else 50
+                    pct      = ((c["Close"] - p["Close"]) / p["Close"]) * 100
+                    bb_range = c["BB_upper"] - c["BB_lower"]
+                    bb_pct   = (c["Close"] - c["BB_lower"]) / bb_range * 100 if bb_range > 0 else 50
                     results.append({
                         "代碼":   ticker,
-                        "現價":   round(float(c['Close']), 2),
+                        "現價":   round(float(c["Close"]), 2),
                         "漲跌%":  round(float(pct), 2),
-                        "RSI":    round(float(c['RSI']), 1),
-                        "J值":    round(float(c['J']), 1),
+                        "RSI":    round(float(c["RSI"]), 1),
+                        "J值":    round(float(c["J"]), 1),
                         "BB位置": f"{bb_pct:.0f}%",
                     })
                     hits_dfs[ticker] = df
 
             status.empty(); pbar.empty()
-
             if results:
                 st.error(f"🔴 發現 {len(results)} 個賣出標的")
                 show_scan_metrics(results)
                 st.divider()
                 df_show = pd.DataFrame(results)
-                df_show['現價']  = df_show['現價'].map(lambda x: f"{x:.2f}")
-                df_show['漲跌%'] = df_show['漲跌%'].map(lambda x: f"{'+' if x>=0 else ''}{x:.2f}%")
-                df_show['J值']   = df_show['J值'].map(lambda x: f"{x:.1f}")
+                df_show["現價"]  = df_show["現價"].map(lambda x: f"{x:.2f}")
+                df_show["漲跌%"] = df_show["漲跌%"].map(lambda x: f"{'+' if x>=0 else ''}{x:.2f}%")
+                df_show["J值"]   = df_show["J值"].map(lambda x: f"{x:.1f}")
                 st.dataframe(df_show, use_container_width=True)
                 for ticker in hits_dfs:
                     st.write(f"### ⚠️ {ticker}")
@@ -659,14 +630,14 @@ with tabs[3]:
             else:
                 st.warning("目前沒有符合賣出條件的股票，請嘗試減少勾選的條件數量。")
 
-# ===================== TAB 4：分析 =====================
+# ── TAB 4：分析 ───────────────────────────────────────────────────
 with tabs[4]:
     st.subheader("🔍 個股技術分析")
     col_left, col_right = st.columns([1, 3])
     with col_left:
-        custom_ticker = st.text_input("輸入股票代碼", value="0700.HK").upper()
+        custom_ticker   = st.text_input("輸入股票代碼", value="0700.HK").upper()
         analysis_period = st.selectbox("週期", ["3mo", "6mo", "1y", "2y"], index=2, key="analysis_period")
-        analyze_btn = st.button("🔍 分析")
+        analyze_btn     = st.button("🔍 分析")
     with col_right:
         if analyze_btn:
             with st.spinner(f"正在分析 {custom_ticker}..."):
@@ -675,10 +646,10 @@ with tabs[4]:
                 st.error(f"❌ 無法取得 {custom_ticker} 數據，請確認代碼正確。")
             else:
                 df_a = calculate_indicators(df_a)
-                c = df_a.iloc[-1]
+                c    = df_a.iloc[-1]
                 m1, m2, m3, m4 = st.columns(4)
-                m1.metric("現價", f"{c['Close']:.2f}")
-                m2.metric("MA20", f"{c['MA20']:.2f}", f"{((c['Close']-c['MA20'])/c['MA20']*100):.1f}%")
-                m3.metric("J值", f"{c['J']:.1f}")
+                m1.metric("現價",    f"{c['Close']:.2f}")
+                m2.metric("MA20",   f"{c['MA20']:.2f}", f"{((c['Close']-c['MA20'])/c['MA20']*100):.1f}%")
+                m3.metric("RSI",    f"{c['RSI']:.1f}")
                 m4.metric("MACD柱", f"{c['MACD_Hist']:.4f}")
                 show_chart(custom_ticker, df_a)
