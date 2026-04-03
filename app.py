@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import os
 
-st.set_page_config(page_title="港股狙擊手 V8.9.2", layout="wide")
+st.set_page_config(page_title="港股狙擊手 V8.9.3", layout="wide")
 
 # --- 1. 核心數據抓取 ---
 def get_stock_data(ticker, period="1y"):
@@ -26,7 +26,7 @@ def get_stock_data(ticker, period="1y"):
         if df.empty:
             return pd.DataFrame()
 
-        # 修復：統一處理 MultiIndex（新版 yfinance 常見問題）
+        # 統一處理 MultiIndex（新版 yfinance 常見問題）
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = [col[0] for col in df.columns]
 
@@ -155,14 +155,13 @@ def load_stocks():
 STOCKS = load_stocks()
 
 # --- 6. 主程式 UI ---
-st.title("🏹 港股狙擊手 V8.9.2")
+st.title("🏹 港股狙擊手 V8.9.3")
 
 tabs = st.tabs(["🌍 指數", "🏆 跑贏大市", "🟢 買入掃描", "🔴 賣出掃描", "🔍 分析"])
 
 # ===================== TAB 0：指數 =====================
 with tabs[0]:
     st.subheader("🌍 主要指數走勢")
-    # 修改：替換成 VIX
     indices = {
         "恆生指數 (^HSI)": "^HSI",
         "恆生科技 (^HSTECH)": "^HSTECH",
@@ -184,12 +183,11 @@ with tabs[0]:
 
 # ===================== TAB 1：跑贏大市 =====================
 with tabs[1]:
-    st.subheader("🏆 跑贏大市排行")
+    st.subheader("🏆 跑贏大市排行 (僅顯示強勢股)")
     
-    # 修改：新增 1日 和 1週，並設定對應的 K 線回推天數
     period_options = {
-        "1日 (1d)": 2,    # 取最後2天來算1日升跌
-        "1週 (1w)": 6,    # 取最後6天來算1週升跌
+        "1日 (1d)": 2,    
+        "1週 (1w)": 6,    
         "1個月 (1mo)": 22,
         "3個月 (3mo)": 63,
         "6個月 (6mo)": 126
@@ -200,7 +198,6 @@ with tabs[1]:
         with st.spinner("正在比較各股與恆指表現..."):
             lb = period_options[period_beat]
             
-            # 統一抓 6 個月確保有足夠歷史資料切片，防止 1d 抓不到數據
             df_hsi = get_stock_data("^HSI", period="6mo")
             if df_hsi.empty:
                 st.error("無法取得恆指數據")
@@ -221,7 +218,6 @@ with tabs[1]:
                     current_price = df_s['Close'].iloc[-1]
                     excess = stock_ret - hsi_ret
                     
-                    # 修改：符合你要求的欄位 (代碼, 現價, 股票升幅%, 恆指升幅%, 超額回報%)
                     results.append({
                         "代碼": s,
                         "現價": current_price,
@@ -232,20 +228,25 @@ with tabs[1]:
                 pbar.empty()
 
                 if results:
-                    df_res = pd.DataFrame(results).sort_values("超額回報%", ascending=False)
-                    st.success(f"✅ 共分析 {len(df_res)} 隻股票，期間恆指回報：{hsi_ret:.2f}%")
+                    df_res = pd.DataFrame(results)
                     
-                    # 修改：利用 Pandas Style 美化表格，綠漲紅跌一目了然
-                    styled_df = df_res.style.format({
-                        "現價": "${:.2f}",
-                        "股票升幅%": "{:+.2f}%",
-                        "恆指升幅%": "{:+.2f}%",
-                        "超額回報%": "{:+.2f}%"
-                    }).map(
-                        lambda x: 'color: #26a69a' if x > 0 else ('color: #ef5350' if x < 0 else ''),
-                        subset=['股票升幅%', '超額回報%']
-                    )
-                    st.dataframe(styled_df, use_container_width=True)
+                    # ✅ 核心修改：只保留跑贏大市（超額回報 > 0）的股票，並排序
+                    df_res = df_res[df_res["超額回報%"] > 0].sort_values("超額回報%", ascending=False)
+                    
+                    if not df_res.empty:
+                        st.success(f"✅ 成功篩選出 {len(df_res)} 隻跑贏大市的股票，期間恆指回報：{hsi_ret:.2f}%")
+                        styled_df = df_res.style.format({
+                            "現價": "${:.2f}",
+                            "股票升幅%": "{:+.2f}%",
+                            "恆指升幅%": "{:+.2f}%",
+                            "超額回報%": "{:+.2f}%"
+                        }).map(
+                            lambda x: 'color: #26a69a' if x > 0 else ('color: #ef5350' if x < 0 else ''),
+                            subset=['股票升幅%', '超額回報%']
+                        )
+                        st.dataframe(styled_df, use_container_width=True)
+                    else:
+                        st.warning(f"⚠️ 在此期間內，你的清單中沒有任何股票跑贏大市 (期間恆指回報：{hsi_ret:.2f}%)。")
                 else:
                     st.warning("無法取得足夠數據")
 
