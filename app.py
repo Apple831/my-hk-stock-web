@@ -154,6 +154,12 @@ def load_stocks():
 
 STOCKS = load_stocks()
 
+if st.sidebar.button("🔄 更新股票清單"):
+    import subprocess
+    subprocess.run(["python", "update_stocks.py"], check=True)
+    st.sidebar.success("stocks.txt 已更新！")
+    st.rerun()
+
 # --- 6. 主程式 UI ---
 st.title("🏹 港股狙擊手 V8.9.3")
 
