@@ -126,6 +126,13 @@ def calculate_indicators(df):
     df['D'] = df['K'].ewm(com=2, adjust=False).mean()
     df['J'] = 3 * df['K'] - 2 * df['D']
 
+    # 布林帶 (Bollinger Bands, 20日, 2σ)
+    bb_mid         = df['Close'].rolling(20).mean()
+    bb_std         = df['Close'].rolling(20).std()
+    df['BB_upper'] = bb_mid + 2 * bb_std
+    df['BB_mid']   = bb_mid
+    df['BB_lower'] = bb_mid - 2 * bb_std
+
     return df
 
 # --- 3. 掃描結果 Metric 卡片 ---
@@ -166,6 +173,13 @@ def show_chart(ticker, df):
             x=df.index, y=df[ma], name=ma,
             line=dict(width=1, color=col)
         ), row=1, col=1)
+
+    # 布林帶
+    fig.add_trace(go.Scatter(x=df.index, y=df['BB_upper'], name='BB上',
+        line=dict(width=1, color='rgba(100,180,255,0.6)', dash='dot')), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['BB_lower'], name='BB下',
+        line=dict(width=1, color='rgba(100,180,255,0.6)', dash='dot'),
+        fill='tonexty', fillcolor='rgba(100,180,255,0.05)'), row=1, col=1)
 
     colors = ['#26a69a' if c >= o else '#ef5350'
               for c, o in zip(df['Close'], df['Open'])]
@@ -321,22 +335,24 @@ with tabs[1]:
 
 # ===================== TAB 2：買入掃描 =====================
 with tabs[2]:
-    st.subheader("🟢 買入訊號庫")
+    st.subheader("🟢 買入策略掃描")
+    st.caption("勾選一個或多個策略，系統找出同時符合所有條件的股票")
+
     col_a, col_b = st.columns(2)
-    b1 = col_a.checkbox("📈 價格 > 60MA（多頭趨勢）")
-    b2 = col_a.checkbox("🔥 均線多頭（5>10>20）")
-    b3 = col_a.checkbox("🚀 20日高點突破 + 爆量")
-    b4 = col_b.checkbox("💥 MACD 剛翻紅（金叉）")
-    b5 = col_b.checkbox("📉 KDJ 超賣（J < 10）")
-    b6 = col_b.checkbox("🪃 站上 20MA（轉強）")
+    b1 = col_a.checkbox("① 突破阻力位 + 成交量放大",   help="收盤 > 前20日最高價，且成交量 > 20日均量 1.5 倍")
+    b2 = col_a.checkbox("② MA5 金叉 MA20",             help="5日均線今日上穿20日均線")
+    b3 = col_a.checkbox("③ 底背離（價創新低 MACD未）",  help="收盤創20日新低，但 DIF 未創新低（看漲背離）")
+    b4 = col_a.checkbox("④ KDJ 超賣（J < 10）",        help="KDJ 的 J 值低於 10，極度超賣")
+    b5 = col_b.checkbox("⑤ 缺口低開回補做多",           help="今日開盤低於昨日最低（跳空低開），短期反彈回補")
+    b6 = col_b.checkbox("⑥ 底部形態突破",               help="近期處於低位（MA60以下），今日放量站上 MA20")
+    b7 = col_b.checkbox("⑦ 布林帶下軌買入",             help="收盤跌穿布林帶下軌，均值回歸買點")
 
     if st.button("🟢 開始掃描買點"):
-        if not any([b1, b2, b3, b4, b5, b6]):
-            st.warning("⚠️ 請至少勾選一個條件")
+        if not any([b1, b2, b3, b4, b5, b6, b7]):
+            st.warning("⚠️ 請至少勾選一個策略")
         else:
-            results = []
-            hits_dfs = {}
-            pbar = st.progress(0)
+            results, hits_dfs = [], {}
+            pbar   = st.progress(0)
             status = st.empty()
 
             for i, s in enumerate(STOCKS):
@@ -345,22 +361,40 @@ with tabs[2]:
                 df = get_stock_data(s)
                 if df.empty or len(df) < 60:
                     continue
-
                 df = calculate_indicators(df)
-                c = df.iloc[-1]
-                p = df.iloc[-2]
-                vol_avg = df['Volume'].iloc[-21:-1].mean()
+                c, p    = df.iloc[-1], df.iloc[-2]
+                vol_avg = df['Volume'].rolling(20).mean().iloc[-1]
 
                 checks = []
-                if b1: checks.append(bool(c['Close'] > c['MA60']))
-                if b2: checks.append(bool(c['MA5'] > c['MA10']) and bool(c['MA10'] > c['MA20']))
+                # ① 突破阻力位+放量
+                if b1:
+                    resist    = df['High'].iloc[-21:-1].max()
+                    checks.append(bool(c['Close'] > resist) and bool(c['Volume'] > vol_avg * 1.5))
+                # ② MA5 金叉 MA20
+                if b2:
+                    checks.append(bool(c['MA5'] > c['MA20']) and bool(p['MA5'] <= p['MA20']))
+                # ③ 底背離：價格創 20 日新低，DIF 未創新低
                 if b3:
-                    high_break = bool(c['Close'] > df['High'].iloc[-21:-1].max())
-                    vol_break  = bool(c['Volume'] > vol_avg * 1.5)
-                    checks.append(high_break and vol_break)
-                if b4: checks.append(bool(c['MACD_Hist'] > 0) and bool(p['MACD_Hist'] <= 0))
-                if b5: checks.append(bool(c['J'] < 10))
-                if b6: checks.append(bool(c['Close'] > c['MA20']) and bool(p['Close'] <= p['MA20']))
+                    price_low = df['Close'].iloc[-20:].min()
+                    dif_low   = df['DIF'].iloc[-20:].min()
+                    checks.append(
+                        bool(c['Close'] <= price_low * 1.005) and   # 接近20日最低
+                        bool(c['DIF'] > dif_low * 1.01)             # DIF 未破前低
+                    )
+                # ④ KDJ 超賣
+                if b4:
+                    checks.append(bool(c['J'] < 10))
+                # ⑤ 缺口低開回補
+                if b5:
+                    checks.append(bool(c['Open'] < p['Low']))
+                # ⑥ 底部形態突破：此前低於 MA60，今日放量突破 MA20
+                if b6:
+                    was_below = bool(df['Close'].iloc[-10:-1].mean() < df['MA60'].iloc[-10:-1].mean())
+                    checks.append(was_below and bool(c['Close'] > c['MA20']) and
+                                  bool(p['Close'] <= p['MA20']) and bool(c['Volume'] > vol_avg * 1.3))
+                # ⑦ 布林帶下軌
+                if b7:
+                    checks.append(bool(c['Close'] < c['BB_lower']))
 
                 if checks and all(checks):
                     pct = ((c['Close'] - p['Close']) / p['Close']) * 100
@@ -368,15 +402,15 @@ with tabs[2]:
                         "代碼": s,
                         "現價": round(float(c['Close']), 2),
                         "漲跌%": round(float(pct), 2),
-                        "J值": round(float(c['J']), 1)
+                        "J值": round(float(c['J']), 1),
+                        "BB位置": f"{((c['Close']-c['BB_lower'])/(c['BB_upper']-c['BB_lower'])*100):.0f}%"
                     })
                     hits_dfs[s] = df
 
-            status.empty()
-            pbar.empty()
+            status.empty(); pbar.empty()
 
             if results:
-                st.success(f"✅ 發現 {len(results)} 個標的")
+                st.success(f"✅ 發現 {len(results)} 個買入標的")
                 show_scan_metrics(results)
                 st.divider()
                 df_show = pd.DataFrame(results)
@@ -388,55 +422,79 @@ with tabs[2]:
                     st.write(f"### 🎯 {s}")
                     show_chart(s, hits_dfs[s])
             else:
-                st.warning("⚠️ 沒有符合條件的股票。請嘗試只勾選一個條件（例如：MACD 翻紅）來測試連線是否正常。")
+                st.warning("⚠️ 沒有符合條件的股票，請嘗試減少勾選的條件。")
 
 # ===================== TAB 3：賣出掃描 =====================
 with tabs[3]:
-    st.subheader("🔴 賣出訊號庫")
+    st.subheader("🔴 賣出 / 做空策略掃描")
+    st.caption("勾選一個或多個策略，系統找出同時符合所有條件的股票")
+
     col_c, col_d = st.columns(2)
-    s1 = col_c.checkbox("📉 價格 < 60MA（空頭趨勢）")
-    s4 = col_d.checkbox("💔 MACD 剛翻綠（死叉）")
-    s5 = col_d.checkbox("📈 KDJ 超買（J > 90）")
+    s1 = col_c.checkbox("⑤ 缺口高開回補做空",          help="今日開盤高於昨日最高（跳空高開），短期大概率回補")
+    s2 = col_c.checkbox("⑥ 頭部形態突破做空",           help="近期處於高位（MA60 以上），今日放量跌破 MA20")
+    s3 = col_c.checkbox("⑦ 布林帶上軌賣出",             help="收盤突破布林帶上軌，均值回歸賣點")
+    s4 = col_d.checkbox("⑧ 上漲縮量（警惕反轉）",       help="價格創 10 日新高，但成交量 < 20 日均量 0.6 倍")
+    s5 = col_d.checkbox("⑧ 放量急跌（跟進做空）",        help="收盤下跌 > 2%，且成交量 > 20 日均量 1.5 倍")
+    s6 = col_d.checkbox("② 死叉（MA5 下穿 MA20）",      help="5日均線今日下穿20日均線")
 
     if st.button("🔴 開始掃描賣點"):
-        if not any([s1, s4, s5]):
-            st.warning("⚠️ 請至少勾選一個條件")
+        if not any([s1, s2, s3, s4, s5, s6]):
+            st.warning("⚠️ 請至少勾選一個策略")
         else:
-            results = []
-            hits_dfs = {}
-            pbar = st.progress(0)
+            results, hits_dfs = [], {}
+            pbar   = st.progress(0)
             status = st.empty()
 
-            for i, s in enumerate(STOCKS):
+            for i, ticker in enumerate(STOCKS):
                 pbar.progress((i + 1) / len(STOCKS))
-                status.text(f"正在分析 {s}...")
-                df = get_stock_data(s)
+                status.text(f"正在分析 {ticker}...")
+                df = get_stock_data(ticker)
                 if df.empty or len(df) < 60:
                     continue
                 df = calculate_indicators(df)
-                c = df.iloc[-1]
-                p = df.iloc[-2]
+                c, p    = df.iloc[-1], df.iloc[-2]
+                vol_avg = df['Volume'].rolling(20).mean().iloc[-1]
 
                 checks = []
-                if s1: checks.append(bool(c['Close'] < c['MA60']))
-                if s4: checks.append(bool(c['MACD_Hist'] < 0) and bool(p['MACD_Hist'] >= 0))
-                if s5: checks.append(bool(c['J'] > 90))
+                # ⑤ 缺口高開回補
+                if s1:
+                    checks.append(bool(c['Open'] > p['High']))
+                # ⑥ 頭部形態跌破 MA20
+                if s2:
+                    was_above = bool(df['Close'].iloc[-10:-1].mean() > df['MA60'].iloc[-10:-1].mean())
+                    checks.append(was_above and bool(c['Close'] < c['MA20']) and
+                                  bool(p['Close'] >= p['MA20']) and bool(c['Volume'] > vol_avg * 1.3))
+                # ⑦ 布林帶上軌
+                if s3:
+                    checks.append(bool(c['Close'] > c['BB_upper']))
+                # ⑧ 上漲縮量
+                if s4:
+                    price_high = df['Close'].iloc[-10:].max()
+                    checks.append(bool(c['Close'] >= price_high * 0.995) and
+                                  bool(c['Volume'] < vol_avg * 0.6))
+                # ⑧ 放量急跌
+                if s5:
+                    pct_chg = (c['Close'] - p['Close']) / p['Close'] * 100
+                    checks.append(bool(pct_chg < -2) and bool(c['Volume'] > vol_avg * 1.5))
+                # ② 死叉
+                if s6:
+                    checks.append(bool(c['MA5'] < c['MA20']) and bool(p['MA5'] >= p['MA20']))
 
                 if checks and all(checks):
                     pct = ((c['Close'] - p['Close']) / p['Close']) * 100
                     results.append({
-                        "代碼": s,
+                        "代碼": ticker,
                         "現價": round(float(c['Close']), 2),
                         "漲跌%": round(float(pct), 2),
-                        "J值": round(float(c['J']), 1)
+                        "J值": round(float(c['J']), 1),
+                        "BB位置": f"{((c['Close']-c['BB_lower'])/(c['BB_upper']-c['BB_lower'])*100):.0f}%"
                     })
-                    hits_dfs[s] = df
+                    hits_dfs[ticker] = df
 
-            status.empty()
-            pbar.empty()
+            status.empty(); pbar.empty()
 
             if results:
-                st.error(f"🔴 發現 {len(results)} 個標的")
+                st.error(f"🔴 發現 {len(results)} 個賣出標的")
                 show_scan_metrics(results)
                 st.divider()
                 df_show = pd.DataFrame(results)
@@ -444,9 +502,9 @@ with tabs[3]:
                 df_show['漲跌%'] = df_show['漲跌%'].map(lambda x: f"{'+' if x>=0 else ''}{x:.2f}%")
                 df_show['J值']   = df_show['J值'].map(lambda x: f"{x:.1f}")
                 st.dataframe(df_show, use_container_width=True)
-                for s in hits_dfs:
-                    st.write(f"### ⚠️ {s}")
-                    show_chart(s, hits_dfs[s])
+                for ticker in hits_dfs:
+                    st.write(f"### ⚠️ {ticker}")
+                    show_chart(ticker, hits_dfs[ticker])
             else:
                 st.warning("目前沒有符合賣出條件的股票。")
 
