@@ -3,13 +3,14 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from datetime import datetime
 import requests
 import os
 
-st.set_page_config(page_title="港股狙擊手 V9", layout="wide")
+st.set_page_config(page_title="港股狙擊手 V9.1", layout="wide")
 
 # ══════════════════════════════════════════════════════════════════
-# TradingView Screener — 直接 call，不需要 subprocess / 外部腳本
+# TradingView Screener
 # ══════════════════════════════════════════════════════════════════
 TV_URL = "https://scanner.tradingview.com/hongkong/scan"
 TV_HEADERS = {
@@ -20,13 +21,6 @@ TV_HEADERS = {
 }
 
 def fetch_stocks_from_tradingview(min_cap_hkd: int = 10_000_000_000) -> list:
-    """
-    用 TradingView Screener 篩選港股：
-      - 主要上市 (is_primary = True)
-      - 市值 > min_cap_hkd 港元（預設 100 億）
-      - EPS TTM > 0（盈利公司）
-    回傳 ["0700.HK", "9988.HK", ...] 格式清單
-    """
     payload = {
         "filter": [
             {"left": "market_cap_basic",             "operation": "greater", "right": min_cap_hkd / 7.8},
@@ -35,8 +29,7 @@ def fetch_stocks_from_tradingview(min_cap_hkd: int = 10_000_000_000) -> list:
         ],
         "markets": ["hongkong"],
         "symbols": {"query": {"types": ["stock"]}, "tickers": []},
-        "columns": ["name", "description", "close",
-                    "market_cap_basic", "earnings_per_share_basic_ttm"],
+        "columns": ["name", "description", "close", "market_cap_basic", "earnings_per_share_basic_ttm"],
         "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
         "range": [0, 500]
     }
@@ -46,24 +39,76 @@ def fetch_stocks_from_tradingview(min_cap_hkd: int = 10_000_000_000) -> list:
     tickers = []
     for row in rows:
         d = row.get("d", [])
-        if not d:
-            continue
+        if not d: continue
         try:
             tickers.append(f"{int(d[0]):04d}.HK")
         except (ValueError, TypeError):
             continue
     return tickers
 
-# ── Sidebar：更新股票清單 ─────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# 批量下載核心 — 一次下載全部股票，存入 session_state cache
+# ══════════════════════════════════════════════════════════════════
+def batch_download(tickers: list, period: str = "1y") -> dict:
+    """
+    用 yf.download(list) 一次過下載所有 tickers，
+    回傳 {ticker: DataFrame} 字典，已計算好 indicators。
+    比逐隻下載快 ~10x。
+    """
+    cache = {}
+    # yf.download 支援 list，回傳 MultiIndex columns: (OHLCV, Ticker)
+    raw = yf.download(
+        tickers, period=period,
+        progress=False, auto_adjust=True,
+        group_by="ticker", threads=True
+    )
+    if raw.empty:
+        return cache
+
+    for ticker in tickers:
+        try:
+            # 多 ticker 時是 MultiIndex，單 ticker 時是普通 columns
+            if isinstance(raw.columns, pd.MultiIndex):
+                if ticker not in raw.columns.get_level_values(1):
+                    continue
+                df = raw.xs(ticker, axis=1, level=1).copy()
+            else:
+                df = raw.copy()
+
+            df.columns = [str(c).strip() for c in df.columns]
+            df.index   = pd.to_datetime(df.index).tz_localize(None)
+            df = df.dropna(subset=["Close"])
+            if len(df) < 60:
+                continue
+            cache[ticker] = calculate_indicators(df)
+        except Exception:
+            continue
+    return cache
+
+def get_cache_label() -> str:
+    ts = st.session_state.get("cache_time")
+    n  = len(st.session_state.get("stock_cache", {}))
+    if ts and n:
+        return f"✅ 已緩存 {n} 隻｜{ts}"
+    return "⚠️ 尚未緩存"
+
+# ══════════════════════════════════════════════════════════════════
+# Sidebar
+# ══════════════════════════════════════════════════════════════════
 with st.sidebar:
-    st.markdown("### ⚙️ 股票清單")
-    st.caption(f"目前清單：{len(st.session_state.get('stocks', [])) or '讀取中'} 隻")
+    st.markdown("### ⚙️ 數據控制台")
+
+    # 股票清單狀態
+    n_stocks = len(st.session_state.get("stocks", []))
+    st.caption(f"股票清單：{n_stocks or '讀取中'} 隻")
     if st.button("🔄 更新清單 (TradingView)"):
-        with st.spinner("篩選中：主要上市 | 市值>100億 | EPS>0 ..."):
+        with st.spinner("篩選中：主要上市｜市值>100億｜EPS>0..."):
             try:
                 new_stocks = fetch_stocks_from_tradingview()
                 if new_stocks:
                     st.session_state["stocks"] = new_stocks
+                    st.session_state.pop("stock_cache", None)   # 清舊 cache
+                    st.session_state.pop("cache_time", None)
                     st.success(f"✅ 已更新！共 {len(new_stocks)} 隻")
                     st.rerun()
                 else:
@@ -71,37 +116,73 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"❌ 失敗：{e}")
 
+    st.divider()
 
-# --- 1. 核心數據抓取 ---
+    # ── 批量下載按鈕 ──────────────────────────────────────────
+    st.markdown("### 🚀 批量下載數據")
+    st.caption(get_cache_label())
+    cache_period = st.selectbox("下載週期", ["6mo", "1y", "2y"], index=1, key="cache_period")
+
+    if st.button("⬇️ 批量下載全部股票", type="primary"):
+        stocks_to_dl = st.session_state.get("stocks", load_stocks_from_file())
+        if not stocks_to_dl:
+            st.warning("請先載入股票清單")
+        else:
+            prog  = st.progress(0, text="準備下載...")
+            # 分批處理避免單次請求過大（每批 20 隻）
+            batch_size = 20
+            all_cache  = {}
+            batches    = [stocks_to_dl[i:i+batch_size] for i in range(0, len(stocks_to_dl), batch_size)]
+            for bi, batch in enumerate(batches):
+                prog.progress(
+                    (bi + 1) / len(batches),
+                    text=f"下載第 {bi+1}/{len(batches)} 批（每批 {batch_size} 隻）..."
+                )
+                all_cache.update(batch_download(batch, period=cache_period))
+
+            prog.empty()
+            st.session_state["stock_cache"] = all_cache
+            st.session_state["cache_time"]  = datetime.now().strftime("%H:%M")
+            st.success(f"✅ 完成！已緩存 {len(all_cache)} 隻股票數據")
+            st.rerun()
+
+    if st.session_state.get("stock_cache"):
+        if st.button("🗑️ 清除緩存"):
+            st.session_state.pop("stock_cache", None)
+            st.session_state.pop("cache_time",  None)
+            st.rerun()
+
+# ══════════════════════════════════════════════════════════════════
+# 1. 核心數據抓取（個股用，非掃描）
+# ══════════════════════════════════════════════════════════════════
+def load_stocks_from_file() -> list:
+    if os.path.exists("stocks.txt"):
+        stocks = [line.split("#")[0].strip() for line in open("stocks.txt", "r") if ".HK" in line]
+        if stocks:
+            return stocks
+    return ["0700.HK", "9988.HK", "3690.HK"]
+
 def get_stock_data(ticker, period="1y"):
     try:
         if ticker == "^HSTECH":
             df = yf.download("800700.HK", period=period, progress=False, auto_adjust=True)
-            if df.empty:
-                df = yf.download("^HSTECH", period=period, progress=False, auto_adjust=True)
-            if df.empty:
-                df = yf.download("3032.HK", period=period, progress=False, auto_adjust=True)
+            if df.empty: df = yf.download("^HSTECH", period=period, progress=False, auto_adjust=True)
+            if df.empty: df = yf.download("3032.HK",  period=period, progress=False, auto_adjust=True)
         elif ticker == "^HSI":
             df = yf.download("^HSI", period=period, progress=False, auto_adjust=True)
-            if df.empty:
-                df = yf.download("2800.HK", period=period, progress=False, auto_adjust=True)
+            if df.empty: df = yf.download("2800.HK", period=period, progress=False, auto_adjust=True)
         else:
             df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
 
-        if df.empty:
-            return pd.DataFrame()
-
-        # 統一處理 MultiIndex（新版 yfinance 常見問題）
+        if df.empty: return pd.DataFrame()
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = [col[0] for col in df.columns]
-
-        # 確保欄位名稱正確
         df.columns = [str(c).strip() for c in df.columns]
-
-        df.index = pd.to_datetime(df.index).tz_localize(None)
-        return df.dropna(subset=['Close'])
-    except Exception as e:
+        df.index   = pd.to_datetime(df.index).tz_localize(None)
+        return df.dropna(subset=["Close"])
+    except Exception:
         return pd.DataFrame()
+
 
 # --- 2. 指標計算函數 ---
 def calculate_indicators(df):
@@ -142,7 +223,31 @@ def calculate_indicators(df):
 
     return df
 
-# --- 3. 掃描結果 Metric 卡片 ---
+# --- 3. Cache 讀取助手 ---
+def get_cached(ticker) -> pd.DataFrame:
+    """先從 session_state cache 讀，沒有才單獨 download（fallback）"""
+    cache = st.session_state.get("stock_cache", {})
+    if ticker in cache:
+        return cache[ticker]
+    df = get_stock_data(ticker)
+    if not df.empty:
+        return calculate_indicators(df)
+    return pd.DataFrame()
+
+def cache_banner():
+    """在掃描 Tab 頂部顯示緩存狀態提示"""
+    cache = st.session_state.get("stock_cache", {})
+    if cache:
+        ts = st.session_state.get("cache_time", "")
+        st.success(f"⚡ 使用緩存數據（{len(cache)} 隻，{ts} 下載）— 掃描將在數秒內完成", icon="🚀")
+    else:
+        st.warning(
+            "⚠️ 尚未緩存數據，掃描將逐隻下載（較慢）。"
+            "建議先點擊左側 **⬇️ 批量下載全部股票** 再掃描！",
+            icon="🐢"
+        )
+
+# --- 掃描結果 Metric 卡片 ---
 def show_scan_metrics(results):
     """在表格上方顯示每個標的的現價 + 漲跌% 卡片"""
     cols_per_row = 4
@@ -243,17 +348,14 @@ def show_chart(ticker, df):
 def load_stocks():
     if "stocks" in st.session_state and st.session_state["stocks"]:
         return st.session_state["stocks"]
-    if os.path.exists('stocks.txt'):
-        stocks = [line.split('#')[0].strip() for line in open('stocks.txt', 'r') if ".HK" in line]
-        if stocks:
-            st.session_state["stocks"] = stocks
-            return stocks
-    return ["0700.HK", "9988.HK", "3690.HK"]  # 最低備援
+    stocks = load_stocks_from_file()
+    st.session_state["stocks"] = stocks
+    return stocks
 
 STOCKS = load_stocks()
 
 # --- 6. 主程式 UI ---
-st.title("🏹 港股狙擊手 V9")
+st.title("🏹 港股狙擊手 V9.1")
 
 tabs = st.tabs(["🌍 指數", "🏆 跑贏大市", "🟢 買入掃描", "🔴 賣出掃描", "🔍 分析"])
 
@@ -282,10 +384,11 @@ with tabs[0]:
 # ===================== TAB 1：跑贏大市 =====================
 with tabs[1]:
     st.subheader("🏆 跑贏大市排行")
-    
+    cache_banner()
+
     period_options = {
-        "1日 (1d)": 2,    
-        "1週 (1w)": 6,    
+        "1日 (1d)": 2,
+        "1週 (1w)": 6,
         "1個月 (1mo)": 22,
         "3個月 (3mo)": 63,
         "6個月 (6mo)": 126
@@ -295,7 +398,6 @@ with tabs[1]:
     if st.button("📊 開始計算跑贏大市"):
         with st.spinner("正在比較各股與恆指表現..."):
             lb = period_options[period_beat]
-            
             df_hsi = get_stock_data("^HSI", period="6mo")
             if df_hsi.empty:
                 st.error("無法取得恆指數據")
@@ -307,18 +409,15 @@ with tabs[1]:
                 pbar = st.progress(0)
                 for i, s in enumerate(STOCKS):
                     pbar.progress((i + 1) / len(STOCKS))
-                    df_s = get_stock_data(s, period="6mo")
+                    df_s = get_cached(s)
                     if df_s.empty or len(df_s) < 2:
                         continue
-                    
                     start_idx_s = -lb if len(df_s) >= lb else 0
-                    stock_ret = (df_s['Close'].iloc[-1] - df_s['Close'].iloc[start_idx_s]) / df_s['Close'].iloc[start_idx_s] * 100
-                    current_price = df_s['Close'].iloc[-1]
-                    excess = stock_ret - hsi_ret
-                    
+                    stock_ret   = (df_s['Close'].iloc[-1] - df_s['Close'].iloc[start_idx_s]) / df_s['Close'].iloc[start_idx_s] * 100
+                    excess      = stock_ret - hsi_ret
                     results.append({
-                        "代碼": s,
-                        "現價": current_price,
+                        "代碼":      s,
+                        "現價":      round(float(df_s['Close'].iloc[-1]), 2),
                         "股票升幅%": stock_ret,
                         "恆指升幅%": hsi_ret,
                         "超額回報%": excess,
@@ -327,10 +426,7 @@ with tabs[1]:
 
                 if results:
                     df_res = pd.DataFrame(results)
-                    
-                    # ✅ 核心修改：只保留跑贏大市（超額回報 > 0）的股票，並排序
                     df_res = df_res[df_res["超額回報%"] > 0].sort_values("超額回報%", ascending=False)
-                    
                     if not df_res.empty:
                         st.success(f"✅ 成功篩選出 {len(df_res)} 隻跑贏大市的股票，期間恆指回報：{hsi_ret:.2f}%")
                         styled_df = df_res.style.format({
@@ -351,6 +447,7 @@ with tabs[1]:
 # ===================== TAB 2：買入掃描 =====================
 with tabs[2]:
     st.subheader("🟢 買入策略掃描")
+    cache_banner()
 
     # ── 策略組合建議 ──────────────────────────────────────────
     with st.expander("💡 策略組合建議（點擊展開）", expanded=True):
@@ -394,7 +491,7 @@ with tabs[2]:
             for i, s in enumerate(STOCKS):
                 pbar.progress((i + 1) / len(STOCKS))
                 status.text(f"正在分析 {s}...")
-                df = get_stock_data(s)
+                df = get_cached(s)
                 if df.empty or len(df) < 60:
                     continue
                 df = calculate_indicators(df)
@@ -460,6 +557,7 @@ with tabs[2]:
 # ===================== TAB 3：賣出掃描 =====================
 with tabs[3]:
     st.subheader("🔴 賣出 / 做空策略掃描")
+    cache_banner()
 
     # ── 策略組合建議 ──────────────────────────────────────────
     with st.expander("💡 策略組合建議（點擊展開）", expanded=True):
@@ -501,7 +599,7 @@ with tabs[3]:
             for i, ticker in enumerate(STOCKS):
                 pbar.progress((i + 1) / len(STOCKS))
                 status.text(f"正在分析 {ticker}...")
-                df = get_stock_data(ticker)
+                df = get_cached(ticker)
                 if df.empty or len(df) < 60:
                     continue
                 df = calculate_indicators(df)
