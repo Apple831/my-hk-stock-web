@@ -281,6 +281,321 @@ def show_chart(ticker: str, df: pd.DataFrame):
     )
     st.plotly_chart(fig, use_container_width=True)
 
+# ── 回測引擎 ──────────────────────────────────────────────────────
+def _buy_check(df: pd.DataFrame, i: int, b1,b2,b3,b4,b5,b6,b7,b8,b9) -> bool:
+    if i < 61:
+        return False
+    c       = df.iloc[i]
+    p       = df.iloc[i - 1]
+    vol_avg = df["Volume"].iloc[max(0, i - 20):i].mean()
+    checks  = []
+    if b1:
+        resist = df["High"].iloc[max(0, i - 21):i - 1].max()
+        checks.append(bool(c["Close"] > resist) and bool(c["Volume"] > vol_avg * 1.5))
+    if b2:
+        checks.append(bool(c["MA5"] > c["MA20"]) and bool(p["MA5"] <= p["MA20"]))
+    if b3:
+        pl = df["Close"].iloc[max(0, i - 20):i].min()
+        dl = df["DIF"].iloc[max(0, i - 20):i].min()
+        checks.append(bool(c["Close"] <= pl * 1.005) and bool(c["DIF"] > dl * 1.01))
+    if b4:
+        checks.append(bool(c["J"] < 10))
+    if b5:
+        checks.append(bool(c["Open"] < p["Low"]))
+    if b6:
+        was_below = bool(df["Close"].iloc[max(0, i - 10):i - 1].mean() <
+                         df["MA60"].iloc[max(0, i - 10):i - 1].mean())
+        checks.append(was_below and bool(c["Close"] > c["MA20"]) and
+                      bool(p["Close"] <= p["MA20"]) and bool(c["Volume"] > vol_avg * 1.3))
+    if b7:
+        checks.append(bool(c["Close"] < c["BB_lower"]))
+    if b8:
+        checks.append(bool(c["RSI"] < 30))
+    if b9:
+        checks.append(bool(c["DIF"] > c["DEA"]) and bool(p["DIF"] <= p["DEA"]))
+    return bool(checks and all(checks))
+
+
+def _sell_check(df: pd.DataFrame, i: int, s1,s2,s3,s4,s5,s6,s7,s8) -> bool:
+    if i < 61:
+        return False
+    c       = df.iloc[i]
+    p       = df.iloc[i - 1]
+    vol_avg = df["Volume"].iloc[max(0, i - 20):i].mean()
+    checks  = []
+    if s1:
+        checks.append(bool(c["Open"] > p["High"]))
+    if s2:
+        was_above = bool(df["Close"].iloc[max(0, i - 10):i - 1].mean() >
+                         df["MA60"].iloc[max(0, i - 10):i - 1].mean())
+        checks.append(was_above and bool(c["Close"] < c["MA20"]) and
+                      bool(p["Close"] >= p["MA20"]) and bool(c["Volume"] > vol_avg * 1.3))
+    if s3:
+        checks.append(bool(c["Close"] > c["BB_upper"]))
+    if s4:
+        ph = df["Close"].iloc[max(0, i - 10):i + 1].max()
+        checks.append(bool(c["Close"] >= ph * 0.995) and bool(c["Volume"] < vol_avg * 0.6))
+    if s5:
+        pct_chg = (c["Close"] - p["Close"]) / p["Close"] * 100
+        checks.append(bool(pct_chg < -2) and bool(c["Volume"] > vol_avg * 1.5))
+    if s6:
+        checks.append(bool(c["MA5"] < c["MA20"]) and bool(p["MA5"] >= p["MA20"]))
+    if s7:
+        checks.append(bool(c["RSI"] > 70))
+    if s8:
+        checks.append(bool(c["DIF"] < c["DEA"]) and bool(p["DIF"] >= p["DEA"]))
+    return bool(checks and all(checks))
+
+
+def run_backtest(
+    df: pd.DataFrame,
+    buy_sigs: tuple, sell_sigs: tuple,
+    initial_capital: float = 100_000,
+    commission: float = 0.0015,
+    stop_loss_pct: float = None,
+    take_profit_pct: float = None,
+    max_hold_days: int = None,
+) -> tuple:
+    """
+    核心回測引擎。
+    Returns: (trades: list[dict], equity_df: pd.DataFrame, final_capital: float)
+    """
+    capital   = initial_capital
+    position  = 0          # 持股數量
+    entry_px  = 0.0
+    entry_date = None
+    entry_idx  = None
+    trades    = []
+    equity    = []
+
+    any_sell = any(sell_sigs)
+
+    for i in range(61, len(df)):
+        date  = df.index[i]
+        close = float(df["Close"].iloc[i])
+
+        cur_val = capital + position * close
+        equity.append({"date": date, "equity": cur_val})
+
+        if position == 0:
+            # ── 嘗試買入 ──────────────────────────────────────────
+            if _buy_check(df, i, *buy_sigs):
+                shares = int(capital / (close * (1 + commission)))
+                if shares > 0:
+                    capital  -= shares * close * (1 + commission)
+                    position  = shares
+                    entry_px  = close
+                    entry_date = date
+                    entry_idx  = i
+        else:
+            # ── 檢查賣出條件 ──────────────────────────────────────
+            reason = None
+            days_held = i - entry_idx
+
+            if stop_loss_pct and close <= entry_px * (1 - stop_loss_pct / 100):
+                reason = f"止損 -{stop_loss_pct:.0f}%"
+            elif take_profit_pct and close >= entry_px * (1 + take_profit_pct / 100):
+                reason = f"止盈 +{take_profit_pct:.0f}%"
+            elif max_hold_days and days_held >= max_hold_days:
+                reason = f"超時 {max_hold_days}日"
+            elif any_sell and _sell_check(df, i, *sell_sigs):
+                reason = "策略訊號"
+
+            if reason:
+                proceeds = position * close * (1 - commission)
+                pnl_pct  = (close - entry_px) / entry_px * 100
+                pnl_hkd  = proceeds - position * entry_px * (1 + commission)
+                trades.append({
+                    "買入日期":  entry_date.strftime("%Y-%m-%d"),
+                    "賣出日期":  date.strftime("%Y-%m-%d"),
+                    "買入價":    round(entry_px, 3),
+                    "賣出價":    round(close, 3),
+                    "回報%":     round(pnl_pct, 2),
+                    "盈虧(HKD)": round(pnl_hkd, 0),
+                    "持倉天數":  days_held,
+                    "賣出原因":  reason,
+                    "_buy_date": entry_date,
+                    "_sell_date": date,
+                    "_win":      pnl_pct > 0,
+                })
+                capital  += proceeds
+                position  = 0
+                entry_px  = 0.0
+
+    # ── 期末持倉強制平倉 ──────────────────────────────────────────
+    if position > 0:
+        last_close = float(df["Close"].iloc[-1])
+        proceeds   = position * last_close * (1 - commission)
+        pnl_pct    = (last_close - entry_px) / entry_px * 100
+        pnl_hkd    = proceeds - position * entry_px * (1 + commission)
+        trades.append({
+            "買入日期":  entry_date.strftime("%Y-%m-%d"),
+            "賣出日期":  df.index[-1].strftime("%Y-%m-%d") + "（持倉中）",
+            "買入價":    round(entry_px, 3),
+            "賣出價":    round(last_close, 3),
+            "回報%":     round(pnl_pct, 2),
+            "盈虧(HKD)": round(pnl_hkd, 0),
+            "持倉天數":  len(df) - 1 - entry_idx,
+            "賣出原因":  "期末持倉",
+            "_buy_date": entry_date,
+            "_sell_date": df.index[-1],
+            "_win":      pnl_pct > 0,
+        })
+        capital += proceeds
+
+    equity_df = pd.DataFrame(equity).set_index("date") if equity else pd.DataFrame()
+    return trades, equity_df, capital
+
+
+def calc_bt_metrics(trades, equity_df, initial_capital):
+    """計算回測績效摘要"""
+    if not trades:
+        return {}
+    closed = [t for t in trades if "（持倉中）" not in t["賣出日期"]]
+    total  = len(closed)
+    wins   = sum(1 for t in closed if t["_win"])
+    win_rate = wins / total * 100 if total else 0
+
+    final_cap   = initial_capital + sum(t["盈虧(HKD)"] for t in trades)
+    total_ret   = (final_cap - initial_capital) / initial_capital * 100
+    avg_ret     = sum(t["回報%"] for t in closed) / total if total else 0
+    avg_win     = sum(t["回報%"] for t in closed if t["_win"]) / wins if wins else 0
+    avg_loss    = sum(t["回報%"] for t in closed if not t["_win"]) / (total - wins) if (total - wins) else 0
+    avg_days    = sum(t["持倉天數"] for t in closed) / total if total else 0
+
+    # 最大回撤
+    max_dd = 0
+    if not equity_df.empty:
+        rolling_max = equity_df["equity"].cummax()
+        dd          = (equity_df["equity"] - rolling_max) / rolling_max * 100
+        max_dd      = float(dd.min())
+
+    # 夏普比率（簡化日收益）
+    sharpe = 0
+    if not equity_df.empty and len(equity_df) > 1:
+        daily_ret = equity_df["equity"].pct_change().dropna()
+        if daily_ret.std() > 0:
+            sharpe = float(daily_ret.mean() / daily_ret.std() * (252 ** 0.5))
+
+    return {
+        "總回報%":      round(total_ret, 2),
+        "交易次數":     total,
+        "勝率%":        round(win_rate, 1),
+        "平均每筆回報%": round(avg_ret, 2),
+        "平均盈利%":    round(avg_win, 2),
+        "平均虧損%":    round(avg_loss, 2),
+        "平均持倉天數": round(avg_days, 1),
+        "最大回撤%":    round(max_dd, 2),
+        "夏普比率":     round(sharpe, 2),
+        "最終資金":     round(final_cap, 0),
+    }
+
+
+def show_backtest_chart(df: pd.DataFrame, trades: list):
+    """K線圖 + 買賣標記"""
+    fig = make_subplots(
+        rows=3, cols=1, shared_xaxes=True,
+        vertical_spacing=0.03,
+        row_heights=[0.55, 0.2, 0.25],
+    )
+    fig.add_trace(go.Candlestick(
+        x=df.index, open=df["Open"], high=df["High"],
+        low=df["Low"],  close=df["Close"],
+        increasing_line_color="#26a69a", decreasing_line_color="#ef5350",
+        name="K線",
+    ), row=1, col=1)
+    for ma, color in [("MA20", "purple"), ("MA60", "orange")]:
+        fig.add_trace(go.Scatter(x=df.index, y=df[ma], name=ma,
+                                 line=dict(width=1, color=color)), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df["BB_upper"], name="BB上",
+        line=dict(width=1, color="rgba(100,180,255,0.5)", dash="dot")), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df["BB_lower"], name="BB下",
+        line=dict(width=1, color="rgba(100,180,255,0.5)", dash="dot"),
+        fill="tonexty", fillcolor="rgba(100,180,255,0.05)"), row=1, col=1)
+
+    # 買賣點標記
+    for t in trades:
+        bd = t["_buy_date"]
+        sd = t["_sell_date"]
+        win = t["_win"]
+        if bd in df.index:
+            fig.add_trace(go.Scatter(
+                x=[bd], y=[float(df.loc[bd, "Low"]) * 0.985],
+                mode="markers+text",
+                marker=dict(symbol="triangle-up", size=12, color="#00e676"),
+                text=["買"], textposition="bottom center",
+                textfont=dict(size=9, color="#00e676"),
+                showlegend=False,
+            ), row=1, col=1)
+        if sd in df.index:
+            marker_color = "#26a69a" if win else "#ef5350"
+            fig.add_trace(go.Scatter(
+                x=[sd], y=[float(df.loc[sd, "High"]) * 1.015],
+                mode="markers+text",
+                marker=dict(symbol="triangle-down", size=12, color=marker_color),
+                text=["賣"], textposition="top center",
+                textfont=dict(size=9, color=marker_color),
+                showlegend=False,
+            ), row=1, col=1)
+
+    # 成交量
+    v_colors = ["#26a69a" if c >= o else "#ef5350"
+                for c, o in zip(df["Close"], df["Open"])]
+    fig.add_trace(go.Bar(x=df.index, y=df["Volume"],
+                         marker_color=v_colors, name="成交量"), row=2, col=1)
+
+    # RSI
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df["RSI"],
+        line=dict(color="#ff7043", width=1.5), name="RSI"), row=3, col=1)
+    for lvl, clr in [(30, "rgba(38,166,154,0.4)"), (70, "rgba(239,83,80,0.4)")]:
+        fig.add_hline(y=lvl, line_dash="dot", line_color=clr, row=3, col=1)
+
+    fig.update_layout(
+        height=680, showlegend=False,
+        xaxis_rangeslider_visible=False,
+        margin=dict(t=10, b=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def show_equity_curve(equity_df: pd.DataFrame, initial_capital: float,
+                      benchmark_df: pd.DataFrame = None):
+    """資金曲線圖（可疊加恆指基準）"""
+    fig = go.Figure()
+    eq_norm = equity_df["equity"] / initial_capital * 100 - 100
+    fig.add_trace(go.Scatter(
+        x=equity_df.index, y=eq_norm,
+        name="策略回報%", fill="tozeroy",
+        line=dict(color="#26a69a", width=2),
+        fillcolor="rgba(38,166,154,0.15)",
+    ))
+    if benchmark_df is not None and not benchmark_df.empty:
+        common_start = equity_df.index[0]
+        bm = benchmark_df["Close"].loc[benchmark_df.index >= common_start]
+        if not bm.empty:
+            bm_norm = bm / bm.iloc[0] * 100 - 100
+            fig.add_trace(go.Scatter(
+                x=bm_norm.index, y=bm_norm,
+                name="恆生指數%",
+                line=dict(color="#f9a825", width=1.5, dash="dot"),
+            ))
+    fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.3)")
+    fig.update_layout(
+        height=300,
+        margin=dict(t=10, b=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        yaxis_ticksuffix="%",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
 # ══════════════════════════════════════════════════════════════════
 # ② Sidebar（所有函數已定義，安全呼叫）
 # ══════════════════════════════════════════════════════════════════
@@ -341,7 +656,7 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════
 STOCKS = load_stocks()
 st.title("🏹 港股狙擊手 V9.2")
-tabs = st.tabs(["🌍 指數", "🏆 跑贏大市", "🟢 買入掃描", "🔴 賣出掃描", "🔍 分析"])
+tabs = st.tabs(["🌍 指數", "🏆 跑贏大市", "🟢 買入掃描", "🔴 賣出掃描", "🔍 分析", "📊 回測"])
 
 # ── TAB 0：指數 ───────────────────────────────────────────────────
 with tabs[0]:
@@ -815,3 +1130,164 @@ with tabs[4]:
                 # ── K 線圖 ────────────────────────────────────────
                 st.markdown(f"### 📈 {custom_ticker} 技術圖表")
                 show_chart(custom_ticker, df_a)
+
+# ── TAB 5：回測 ───────────────────────────────────────────────────
+with tabs[5]:
+    st.subheader("📊 策略回測系統")
+    st.caption("選擇股票、買賣策略組合，模擬歷史表現並計算績效指標")
+
+    # ── 參數設定 ─────────────────────────────────────────────────
+    with st.expander("⚙️ 回測參數設定", expanded=True):
+        bt_col1, bt_col2 = st.columns(2)
+        with bt_col1:
+            bt_ticker = st.text_input("股票代碼", value="0700.HK",
+                                       key="bt_ticker").upper()
+            bt_period = st.selectbox("回測週期", ["1y", "2y", "5y"], index=1,
+                                      key="bt_period")
+            bt_capital = st.number_input("初始資金 (HKD)", value=100_000,
+                                          step=10_000, min_value=10_000,
+                                          key="bt_capital")
+            bt_commission = st.slider("佣金率 (%)", 0.0, 0.5, 0.15, 0.05,
+                                       key="bt_commission") / 100
+
+        with bt_col2:
+            bt_sl = st.number_input("止損 % (0=不啟用)", value=0.0,
+                                     step=1.0, min_value=0.0, max_value=50.0,
+                                     key="bt_sl")
+            bt_tp = st.number_input("止盈 % (0=不啟用)", value=0.0,
+                                     step=5.0, min_value=0.0, max_value=200.0,
+                                     key="bt_tp")
+            bt_maxdays = st.number_input("最長持倉天數 (0=不限)", value=0,
+                                          step=5, min_value=0,
+                                          key="bt_maxdays")
+
+    # ── 買入策略 ─────────────────────────────────────────────────
+    st.markdown("#### 🟢 買入策略（勾選觸發買入的條件）")
+    bc1, bc2 = st.columns(2)
+    bb1 = bc1.checkbox("① 突破阻力位 + 放量",      key="bb1",
+                        help="收盤>前20日高點，成交量>均量1.5倍")
+    bb2 = bc1.checkbox("② MA5 金叉 MA20",           key="bb2")
+    bb3 = bc1.checkbox("③ 底背離（MACD未新低）",    key="bb3")
+    bb4 = bc1.checkbox("④ KDJ 超賣（J < 10）",     key="bb4")
+    bb5 = bc1.checkbox("⑤ 缺口低開回補",            key="bb5")
+    bb6 = bc2.checkbox("⑥ 底部形態突破 MA20",       key="bb6")
+    bb7 = bc2.checkbox("⑦ 布林帶下軌買入",          key="bb7")
+    bb8 = bc2.checkbox("⑧ RSI 超賣（< 30）",        key="bb8")
+    bb9 = bc2.checkbox("⑨ MACD 金叉",               key="bb9")
+
+    # ── 賣出策略 ─────────────────────────────────────────────────
+    st.markdown("#### 🔴 賣出策略（勾選觸發賣出的條件）")
+    st.caption("⚠️ 若不勾選任何賣出策略，只靠止損/止盈/最長持倉天數出場")
+    sc1, sc2 = st.columns(2)
+    bs1 = sc1.checkbox("⑤ 缺口高開做空",            key="bs1")
+    bs2 = sc1.checkbox("⑥ 頭部跌破 MA20（放量）",   key="bs2")
+    bs3 = sc1.checkbox("⑦ 布林帶上軌賣出",          key="bs3")
+    bs4 = sc1.checkbox("⑧ 上漲縮量警惕頂部",        key="bs4")
+    bs5 = sc2.checkbox("⑧ 放量急跌跟進做空",        key="bs5")
+    bs6 = sc2.checkbox("② MA5 死叉 MA20",            key="bs6")
+    bs7 = sc2.checkbox("⑨ RSI 超買（> 70）",         key="bs7")
+    bs8 = sc2.checkbox("⑩ MACD 死叉",               key="bs8")
+
+    buy_sigs  = (bb1,bb2,bb3,bb4,bb5,bb6,bb7,bb8,bb9)
+    sell_sigs = (bs1,bs2,bs3,bs4,bs5,bs6,bs7,bs8)
+
+    run_btn = st.button("🚀 開始回測", type="primary", key="run_bt")
+
+    if run_btn:
+        if not any(buy_sigs):
+            st.warning("⚠️ 請至少勾選一個買入策略")
+        elif not any(sell_sigs) and not bt_sl and not bt_tp and not bt_maxdays:
+            st.warning("⚠️ 請設定至少一種出場條件（賣出策略 / 止損 / 止盈 / 最長持倉天數）")
+        else:
+            with st.spinner(f"正在下載 {bt_ticker} 並執行回測..."):
+                df_bt = get_stock_data(bt_ticker, period=bt_period)
+                df_hsi_bt = get_stock_data("^HSI", period=bt_period)
+
+            if df_bt.empty:
+                st.error(f"❌ 無法取得 {bt_ticker} 數據，請確認代碼正確。")
+            else:
+                df_bt = calculate_indicators(df_bt)
+
+                sl_val = bt_sl if bt_sl > 0 else None
+                tp_val = bt_tp if bt_tp > 0 else None
+                md_val = int(bt_maxdays) if bt_maxdays > 0 else None
+
+                trades, equity_df, final_cap = run_backtest(
+                    df_bt, buy_sigs, sell_sigs,
+                    initial_capital=float(bt_capital),
+                    commission=bt_commission,
+                    stop_loss_pct=sl_val,
+                    take_profit_pct=tp_val,
+                    max_hold_days=md_val,
+                )
+                metrics = calc_bt_metrics(trades, equity_df, float(bt_capital))
+
+                if not metrics:
+                    st.warning("⚠️ 回測期間內沒有觸發任何交易，請嘗試放寬策略條件或拉長週期。")
+                else:
+                    # ── 績效摘要 ───────────────────────────────────
+                    st.divider()
+                    st.markdown("### 📋 績效摘要")
+
+                    total_ret = metrics["總回報%"]
+                    verdict_color = "#26a69a" if total_ret > 0 else "#ef5350"
+                    verdict_icon  = "🟢" if total_ret > 0 else "🔴"
+                    st.markdown(
+                        f"<div style='background:rgba(255,255,255,0.05);"
+                        f"border-left:4px solid {verdict_color};"
+                        f"padding:10px 16px;border-radius:6px;"
+                        f"font-size:18px;font-weight:bold'>"
+                        f"{verdict_icon} 總回報：{total_ret:+.2f}%　｜　"
+                        f"最終資金：HKD {metrics['最終資金']:,.0f}"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.write("")
+
+                    m1, m2, m3, m4, m5 = st.columns(5)
+                    m1.metric("交易次數",     f"{metrics['交易次數']} 次")
+                    m2.metric("勝率",         f"{metrics['勝率%']:.1f}%")
+                    m3.metric("平均每筆回報", f"{metrics['平均每筆回報%']:+.2f}%")
+                    m4.metric("最大回撤",     f"{metrics['最大回撤%']:.2f}%")
+                    m5.metric("夏普比率",     f"{metrics['夏普比率']:.2f}")
+
+                    m6, m7, m8 = st.columns(3)
+                    m6.metric("平均盈利",     f"{metrics['平均盈利%']:+.2f}%")
+                    m7.metric("平均虧損",     f"{metrics['平均虧損%']:+.2f}%")
+                    m8.metric("平均持倉天數", f"{metrics['平均持倉天數']:.0f} 天")
+
+                    # ── 資金曲線 ───────────────────────────────────
+                    st.divider()
+                    st.markdown("### 📈 資金曲線（vs 恆生指數）")
+                    if not equity_df.empty:
+                        show_equity_curve(equity_df, float(bt_capital), df_hsi_bt)
+                    else:
+                        st.info("資金曲線數據不足")
+
+                    # ── K線圖 + 買賣標記 ───────────────────────────
+                    st.divider()
+                    st.markdown(f"### 🎯 {bt_ticker} 交易標記圖")
+                    show_backtest_chart(df_bt, trades)
+
+                    # ── 交易記錄表 ─────────────────────────────────
+                    st.divider()
+                    st.markdown("### 📑 逐筆交易記錄")
+                    if trades:
+                        display_cols = ["買入日期","賣出日期","買入價","賣出價",
+                                        "回報%","盈虧(HKD)","持倉天數","賣出原因"]
+                        df_trades = pd.DataFrame(trades)[display_cols]
+
+                        def color_ret(val):
+                            try:
+                                v = float(val)
+                                return "color:#26a69a" if v > 0 else ("color:#ef5350" if v < 0 else "")
+                            except Exception:
+                                return ""
+
+                        st.dataframe(
+                            df_trades.style.map(color_ret, subset=["回報%","盈虧(HKD)"]),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                    else:
+                        st.info("無交易記錄")
