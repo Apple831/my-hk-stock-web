@@ -7,7 +7,7 @@ from datetime import datetime
 import requests
 import os
 
-st.set_page_config(page_title="港股狙擊手 V9.2", layout="wide")
+st.set_page_config(page_title="港股狙擊手 V9.3", layout="wide")
 
 # ══════════════════════════════════════════════════════════════════
 # ① 所有函數定義（必須在 sidebar / UI 之前）
@@ -655,7 +655,7 @@ with st.sidebar:
 # ③ 主 UI
 # ══════════════════════════════════════════════════════════════════
 STOCKS = load_stocks()
-st.title("🏹 港股狙擊手 V9.2")
+st.title("🏹 港股狙擊手 V9.3")
 tabs = st.tabs(["🌍 指數", "🏆 跑贏大市", "🟢 買入掃描", "🔴 賣出掃描", "🔍 分析", "📊 回測"])
 
 # ── TAB 0：指數 ───────────────────────────────────────────────────
@@ -855,27 +855,27 @@ with tabs[3]:
 
         | 組合 | 勾選策略 | 適用場景 | 勝率參考 |
         |------|---------|---------|---------|
-        | 🔥 **雙重超買出貨** | ⑦ 布林上軌 ＋ ⑨ RSI超買 | 頂部回調，短線 | ⭐⭐⭐⭐ |
-        | 💀 **趨勢反轉確認** | ⑥ 頭部破位 ＋ ② 死叉 | 確認下跌趨勢，中線 | ⭐⭐⭐⭐⭐ |
-        | ⚡ **恐慌急跌跟進** | ⑧ 放量急跌 ＋ ② 死叉 | 短線動能做空 | ⭐⭐⭐ |
-        | 🌊 **缺口回補做空** | ⑤ 缺口高開 ＋ ⑨ RSI超買 | 高開後回補，日內/短線 | ⭐⭐⭐ |
-        | 🏗️ **量價背離出逃** | ⑧ 上漲縮量 ＋ ⑩ MACD死叉 | 頂部出貨訊號 | ⭐⭐⭐⭐ |
+        | 🔥 **雙重超買出貨** | ⑫ 布林上軌 ＋ ⑯ RSI超買 | 頂部回調，短線 | ⭐⭐⭐⭐ |
+        | 💀 **趨勢反轉確認** | ⑪ 頭部破位 ＋ ⑮ 死叉 | 確認下跌趨勢，中線 | ⭐⭐⭐⭐⭐ |
+        | ⚡ **恐慌急跌跟進** | ⑭ 放量急跌 ＋ ⑮ 死叉 | 短線動能做空 | ⭐⭐⭐ |
+        | 🌊 **缺口回補做空** | ⑩ 缺口高開 ＋ ⑯ RSI超買 | 高開後回補，日內/短線 | ⭐⭐⭐ |
+        | 🏗️ **量價背離出逃** | ⑬ 上漲縮量 ＋ ⑰ MACD死叉 | 頂部出貨訊號 | ⭐⭐⭐⭐ |
 
         **⚠️ 不建議組合：**
-        - ⑤ 缺口高開 ＋ ⑧ 放量急跌 → 兩個條件同時觸發概率極低
-        - ⑨ RSI超買 單獨在強勢行情使用 → 強趨勢中 RSI 可長期高位，需配合形態
+        - ⑩ 缺口高開 ⑭ 放量急跌 → 兩個條件同時觸發概率極低
+        - ⑯ RSI超買 單獨在強勢行情使用 → 強趨勢中 RSI 可長期高位，需配合形態
         """)
 
     st.caption("勾選一個或多個策略（多個條件需同時符合）")
     col_c, col_d = st.columns(2)
-    s1 = col_c.checkbox("⑤ 缺口高開回補做空",           help="今日開盤高於昨日最高（跳空高開），短期大概率回補")
-    s2 = col_c.checkbox("⑥ 頭部形態跌破 MA20（放量）",  help="近期均線高位，今日放量跌破 MA20，頭部確認")
-    s3 = col_c.checkbox("⑦ 布林帶上軌賣出",             help="收盤突破布林帶上軌，均值回歸賣點")
-    s4 = col_c.checkbox("⑧ 上漲縮量（警惕頂部）",       help="價格創10日新高，但成交量萎縮（量能不足，假突破）")
-    s5 = col_d.checkbox("⑧ 放量急跌（跟進做空）",        help="收盤跌幅 > 2%，且成交量 > 20日均量 1.5 倍")
-    s6 = col_d.checkbox("② MA5 死叉 MA20",             help="5日均線今日下穿20日均線（趨勢轉弱）")
-    s7 = col_d.checkbox("⑨ RSI 超買（RSI > 70）",      help="RSI 高於 70，超買區間。比 KDJ 穩定，回調概率高")
-    s8 = col_d.checkbox("⑩ MACD 死叉（DIF下穿DEA）",   help="DIF 今日下穿 DEA，動能由強轉弱，中線出場訊號")
+    s1 = col_c.checkbox("⑩ 缺口高開回補做空",           help="今日開盤高於昨日最高（跳空高開），短期大概率回補")
+    s2 = col_c.checkbox("⑪ 頭部形態跌破 MA20（放量）",  help="近期均線高位，今日放量跌破 MA20，頭部確認")
+    s3 = col_c.checkbox("⑫ 布林帶上軌賣出",             help="收盤突破布林帶上軌，均值回歸賣點")
+    s4 = col_c.checkbox("⑬ 上漲縮量（警惕頂部）",       help="價格創10日新高，但成交量萎縮（量能不足，假突破）")
+    s5 = col_d.checkbox("⑭ 放量急跌（跟進做空）",        help="收盤跌幅 > 2%，且成交量 > 20日均量 1.5 倍")
+    s6 = col_d.checkbox("⑮ MA5 死叉 MA20",             help="5日均線今日下穿20日均線（趨勢轉弱）")
+    s7 = col_d.checkbox("⑯ RSI 超買（RSI > 70）",      help="RSI 高於 70，超買區間。比 KDJ 穩定，回調概率高")
+    s8 = col_d.checkbox("⑰ MACD 死叉（DIF下穿DEA）",   help="DIF 今日下穿 DEA，動能由強轉弱，中線出場訊號")
 
     if st.button("🔴 開始掃描賣點"):
         if not any([s1, s2, s3, s4, s5, s6, s7, s8]):
@@ -1013,14 +1013,14 @@ def evaluate_signals(df: pd.DataFrame) -> dict:
     s8_hit    = bool(c["DIF"] < c["DEA"]) and bool(p["DIF"] >= p["DEA"])
 
     sell_signals = [
-        ("⑤ 缺口高開",             f"今開 {c['Open']:.2f} {'>' if s1_hit else '<='} 昨高 {p['High']:.2f}",                                      s1_hit),
-        ("⑥ 頭部形態跌破 MA20",    f"均線高位={was_above}  跌破MA20={'是' if bool(c['Close']<c['MA20']) else '否'}  量比={c['Volume']/vol_avg:.1f}x", s2_hit),
-        ("⑦ 布林帶上軌",           f"收盤 {c['Close']:.2f}  BB上軌 {c['BB_upper']:.2f}",                                                         s3_hit),
-        ("⑧ 上漲縮量",             f"近高={ph:.2f}  量比={c['Volume']/vol_avg:.1f}x（需<0.6x）",                                                  s4_hit),
-        ("⑧ 放量急跌",             f"跌幅={pct_chg:.2f}%  量比={c['Volume']/vol_avg:.1f}x",                                                      s5_hit),
-        ("② MA5 死叉 MA20",        f"MA5={c['MA5']:.2f}  MA20={c['MA20']:.2f}  昨MA5={p['MA5']:.2f}",                                           s6_hit),
-        ("⑨ RSI 超買（> 70）",     f"RSI = {c['RSI']:.1f}",                                                                                      s7_hit),
-        ("⑩ MACD 死叉",            f"DIF={c['DIF']:.4f}  DEA={c['DEA']:.4f}  昨DIF={p['DIF']:.4f}",                                             s8_hit),
+        ("⑩ 缺口高開",             f"今開 {c['Open']:.2f} {'>' if s1_hit else '<='} 昨高 {p['High']:.2f}",                                      s1_hit),
+        ("⑪ 頭部形態跌破 MA20",    f"均線高位={was_above}  跌破MA20={'是' if bool(c['Close']<c['MA20']) else '否'}  量比={c['Volume']/vol_avg:.1f}x", s2_hit),
+        ("⑫ 布林帶上軌",           f"收盤 {c['Close']:.2f}  BB上軌 {c['BB_upper']:.2f}",                                                         s3_hit),
+        ("⑬ 上漲縮量",             f"近高={ph:.2f}  量比={c['Volume']/vol_avg:.1f}x（需<0.6x）",                                                  s4_hit),
+        ("⑭ 放量急跌",             f"跌幅={pct_chg:.2f}%  量比={c['Volume']/vol_avg:.1f}x",                                                      s5_hit),
+        ("⑮ MA5 死叉 MA20",        f"MA5={c['MA5']:.2f}  MA20={c['MA20']:.2f}  昨MA5={p['MA5']:.2f}",                                           s6_hit),
+        ("⑯ RSI 超買（> 70）",     f"RSI = {c['RSI']:.1f}",                                                                                      s7_hit),
+        ("⑰ MACD 死叉",            f"DIF={c['DIF']:.4f}  DEA={c['DEA']:.4f}  昨DIF={p['DIF']:.4f}",                                             s8_hit),
     ]
 
     return {"buy": buy_signals, "sell": sell_signals}
@@ -1179,14 +1179,14 @@ with tabs[5]:
     st.markdown("#### 🔴 賣出策略（勾選觸發賣出的條件）")
     st.caption("⚠️ 若不勾選任何賣出策略，只靠止損/止盈/最長持倉天數出場")
     sc1, sc2 = st.columns(2)
-    bs1 = sc1.checkbox("⑤ 缺口高開做空",            key="bs1")
-    bs2 = sc1.checkbox("⑥ 頭部跌破 MA20（放量）",   key="bs2")
-    bs3 = sc1.checkbox("⑦ 布林帶上軌賣出",          key="bs3")
-    bs4 = sc1.checkbox("⑧ 上漲縮量警惕頂部",        key="bs4")
-    bs5 = sc2.checkbox("⑧ 放量急跌跟進做空",        key="bs5")
-    bs6 = sc2.checkbox("② MA5 死叉 MA20",            key="bs6")
-    bs7 = sc2.checkbox("⑨ RSI 超買（> 70）",         key="bs7")
-    bs8 = sc2.checkbox("⑩ MACD 死叉",               key="bs8")
+    bs1 = sc1.checkbox("⑩ 缺口高開做空",            key="bs1")
+    bs2 = sc1.checkbox("⑪ 頭部跌破 MA20（放量）",   key="bs2")
+    bs3 = sc1.checkbox("⑫ 布林帶上軌賣出",          key="bs3")
+    bs4 = sc1.checkbox("⑬ 上漲縮量警惕頂部",        key="bs4")
+    bs5 = sc2.checkbox("⑭ 放量急跌跟進做空",        key="bs5")
+    bs6 = sc2.checkbox("⑮ MA5 死叉 MA20",            key="bs6")
+    bs7 = sc2.checkbox("⑯ RSI 超買（> 70）",         key="bs7")
+    bs8 = sc2.checkbox("⑰ MACD 死叉",               key="bs8")
 
     buy_sigs  = (bb1,bb2,bb3,bb4,bb5,bb6,bb7,bb8,bb9)
     sell_sigs = (bs1,bs2,bs3,bs4,bs5,bs6,bs7,bs8)
