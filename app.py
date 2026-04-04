@@ -7,7 +7,7 @@ from datetime import datetime
 import requests
 import os
 
-st.set_page_config(page_title="港股狙擊手 V9.4", layout="wide")
+st.set_page_config(page_title="港股狙擊手 V9.5", layout="wide")
 
 # ══════════════════════════════════════════════════════════════════
 # ① 所有函數定義（必須在 sidebar / UI 之前）
@@ -596,9 +596,9 @@ def show_equity_curve(equity_df: pd.DataFrame, initial_capital: float,
     st.plotly_chart(fig, use_container_width=True)
 
 
+# ── 單股回測結果渲染（單股模式 & 批量深挖共用）────────────────────────
 def _render_single_bt_result(ticker, metrics, equity_df, df_bt,
                               trades, initial_capital, df_hsi_bt):
-    """單股回測結果渲染（單股模式 & 批量深挖共用）"""
     total_ret     = metrics["總回報%"]
     verdict_color = "#26a69a" if total_ret > 0 else "#ef5350"
     verdict_icon  = "🟢" if total_ret > 0 else "🔴"
@@ -623,32 +623,27 @@ def _render_single_bt_result(ticker, metrics, equity_df, df_bt,
     m6.metric("平均盈利",     f"{metrics['平均盈利%']:+.2f}%")
     m7.metric("平均虧損",     f"{metrics['平均虧損%']:+.2f}%")
     m8.metric("平均持倉天數", f"{metrics['平均持倉天數']:.0f} 天")
-
     st.divider()
     st.markdown("### 📈 資金曲線（vs 恆生指數）")
     if not equity_df.empty:
         show_equity_curve(equity_df, initial_capital, df_hsi_bt)
-
     st.divider()
     st.markdown(f"### 🎯 {ticker} 交易標記圖")
     show_backtest_chart(df_bt, trades)
-
     st.divider()
     st.markdown("### 📑 逐筆交易記錄")
     if trades:
         display_cols = ["買入日期","賣出日期","買入價","賣出價",
                         "回報%","盈虧(HKD)","持倉天數","賣出原因"]
-        df_trades = pd.DataFrame(trades)[display_cols]
+        df_t = pd.DataFrame(trades)[display_cols]
         def _cr(val):
             try:
                 v = float(val)
                 return "color:#26a69a" if v > 0 else ("color:#ef5350" if v < 0 else "")
             except Exception:
                 return ""
-        st.dataframe(
-            df_trades.style.map(_cr, subset=["回報%","盈虧(HKD)"]),
-            use_container_width=True, hide_index=True,
-        )
+        st.dataframe(df_t.style.map(_cr, subset=["回報%","盈虧(HKD)"]),
+                     use_container_width=True, hide_index=True)
     else:
         st.info("無交易記錄")
 
@@ -697,9 +692,10 @@ with st.sidebar:
                 )
                 all_cache.update(batch_download(batch, period=cache_period))
             prog.empty()
-            st.session_state["stock_cache"] = all_cache
-            st.session_state["cache_time"]  = datetime.now().strftime("%H:%M")
-            st.success(f"✅ 完成！已緩存 {len(all_cache)} 隻股票數據")
+            st.session_state["stock_cache"]  = all_cache
+            st.session_state["cache_time"]   = datetime.now().strftime("%H:%M")
+            st.session_state["cache_period"] = cache_period   # ← 記錄下載週期，供回測比對
+            st.success(f"✅ 完成！已緩存 {len(all_cache)} 隻股票數據（週期：{cache_period}）")
             st.rerun()
 
     if st.session_state.get("stock_cache"):
@@ -712,7 +708,7 @@ with st.sidebar:
 # ③ 主 UI
 # ══════════════════════════════════════════════════════════════════
 STOCKS = load_stocks()
-st.title("🏹 港股狙擊手 V9.4")
+st.title("🏹 港股狙擊手 V9.3")
 tabs = st.tabs(["🌍 指數", "🏆 跑贏大市", "🟢 買入掃描", "🔴 賣出掃描", "🔍 分析", "📊 回測"])
 
 # ── TAB 0：指數 ───────────────────────────────────────────────────
@@ -1190,7 +1186,7 @@ with tabs[4]:
 
 # ── TAB 5：回測 ───────────────────────────────────────────────────
 with tabs[5]:
-    st.subheader("📊 策略回測系統 V9.4")
+    st.subheader("📊 策略回測系統 V9.5")
 
     # ── 模式切換 ─────────────────────────────────────────────────
     bt_mode = st.radio(
@@ -1198,11 +1194,10 @@ with tabs[5]:
         ["🔍 單股回測", "🚀 全倉掃描回測（所有股票）"],
         horizontal=True, key="bt_mode",
     )
-
     st.divider()
 
     # ── 共用：策略選擇 ─────────────────────────────────────────
-    st.markdown("#### 🟢 買入策略")
+    st.markdown("#### 🟢 買入策略（勾選一個或多個，**多個條件需同時觸發**才入場）")
     bc1, bc2 = st.columns(2)
     bb1 = bc1.checkbox("① 突破阻力位 + 放量",    key="bb1", help="收盤>前20日高點，成交量>均量1.5倍")
     bb2 = bc1.checkbox("② MA5 金叉 MA20",         key="bb2")
@@ -1214,8 +1209,12 @@ with tabs[5]:
     bb8 = bc2.checkbox("⑧ RSI 超賣（< 30）",      key="bb8")
     bb9 = bc2.checkbox("⑨ MACD 金叉",             key="bb9")
 
-    st.markdown("#### 🔴 賣出策略")
-    st.caption("⚠️ 若不勾選任何賣出策略，只靠止損 / 止盈 / 最長持倉天數出場")
+    n_buy_sigs = sum([bb1,bb2,bb3,bb4,bb5,bb6,bb7,bb8,bb9])
+    if n_buy_sigs >= 2:
+        st.caption(f"⚠️ 已選 {n_buy_sigs} 個買入條件 → 需**同時**全部觸發才入場，條件越多訊號越少")
+
+    st.markdown("#### 🔴 賣出策略（勾選一個或多個，**多個條件需同時觸發**才出場）")
+    st.caption("不勾選則只靠 止損 / 止盈 / 最長持倉天數 出場")
     sc1, sc2 = st.columns(2)
     bs1 = sc1.checkbox("⑩ 缺口高開做空",          key="bs1")
     bs2 = sc1.checkbox("⑪ 頭部跌破 MA20（放量）", key="bs2")
@@ -1240,28 +1239,28 @@ with tabs[5]:
                                              min_value=10_000, key="bt_capital")
             bt_commission = st.slider("佣金率 (%)", 0.0, 0.5, 0.15, 0.05, key="bt_commission") / 100
         with p_col2:
-            bt_sl      = st.number_input("止損 % (0=不啟用)",       value=0.0, step=1.0,
+            bt_sl      = st.number_input("止損 % (0=不啟用)",     value=0.0, step=1.0,
                                           min_value=0.0, max_value=50.0,  key="bt_sl")
-            bt_tp      = st.number_input("止盈 % (0=不啟用)",       value=0.0, step=5.0,
+            bt_tp      = st.number_input("止盈 % (0=不啟用)",     value=0.0, step=5.0,
                                           min_value=0.0, max_value=200.0, key="bt_tp")
             bt_maxdays = st.number_input("最長持倉天數 (0=不限)", value=0, step=5,
                                           min_value=0, key="bt_maxdays")
 
-        # 只在單股模式顯示股票輸入
         if bt_mode == "🔍 單股回測":
             bt_ticker = st.text_input("股票代碼", value="0700.HK", key="bt_ticker").upper()
         else:
-            bt_min_trades = st.number_input(
-                "最少交易次數篩選（低於此數不顯示）", value=2, min_value=1, step=1,
-                key="bt_min_trades",
-                help="過濾掉回測期間幾乎沒有訊號的股票，避免結果失真",
+            # ── 全倉模式專用參數 ──────────────────────────────
+            ba1, ba2 = st.columns(2)
+            bt_min_trades = ba1.number_input(
+                "最少交易次數（低於此數不顯示）", value=1, min_value=1, step=1, key="bt_min_trades",
+                help="預設 1：只要有過至少 1 次完整買賣就顯示。調高可過濾訊號太少的股票。",
             )
-            bt_sort_col = st.selectbox(
+            bt_sort_col = ba1.selectbox(
                 "排行榜排序依據",
                 ["總回報%", "勝率%", "夏普比率", "交易次數", "最大回撤%"],
                 key="bt_sort_col",
             )
-            bt_top_charts = st.number_input(
+            bt_top_charts = ba2.number_input(
                 "自動展示前 N 名 K 線圖（0=不展示）", value=3, min_value=0, max_value=10,
                 key="bt_top_charts",
             )
@@ -1274,83 +1273,89 @@ with tabs[5]:
     # 模式 A：單股回測
     # ════════════════════════════════════════════════════════════
     if bt_mode == "🔍 單股回測":
-        run_btn = st.button("🚀 開始單股回測", type="primary", key="run_bt_single")
-
-        if run_btn:
+        if st.button("🚀 開始單股回測", type="primary", key="run_bt_single"):
             if not any(buy_sigs):
                 st.warning("⚠️ 請至少勾選一個買入策略")
             elif not any(sell_sigs) and not bt_sl and not bt_tp and not bt_maxdays:
                 st.warning("⚠️ 請設定至少一種出場條件")
             else:
-                with st.spinner(f"正在下載 {bt_ticker} 並執行回測..."):
+                with st.spinner(f"下載 {bt_ticker} 並執行回測..."):
                     df_bt     = get_stock_data(bt_ticker, period=bt_period)
                     df_hsi_bt = get_stock_data("^HSI",    period=bt_period)
-
                 if df_bt.empty:
-                    st.error(f"❌ 無法取得 {bt_ticker} 數據，請確認代碼正確。")
+                    st.error(f"❌ 無法取得 {bt_ticker} 數據")
                 else:
-                    df_bt   = calculate_indicators(df_bt)
+                    df_bt = calculate_indicators(df_bt)
                     trades, equity_df, _ = run_backtest(
                         df_bt, buy_sigs, sell_sigs,
-                        initial_capital=float(bt_capital),
-                        commission=bt_commission,
+                        initial_capital=float(bt_capital), commission=bt_commission,
                         stop_loss_pct=sl_val, take_profit_pct=tp_val, max_hold_days=md_val,
                     )
                     metrics = calc_bt_metrics(trades, equity_df, float(bt_capital))
-
                     if not metrics:
-                        st.warning("⚠️ 回測期間內沒有觸發任何交易，請嘗試放寬策略條件或拉長週期。")
+                        st.warning("⚠️ 回測期間內沒有觸發任何交易。若選了多個買入條件，條件需同時滿足才入場，請嘗試只選一個條件或拉長週期。")
                     else:
-                        _render_single_bt_result(
-                            bt_ticker, metrics, equity_df, df_bt,
-                            trades, float(bt_capital), df_hsi_bt
-                        )
+                        st.divider()
+                        _render_single_bt_result(bt_ticker, metrics, equity_df,
+                                                  df_bt, trades, float(bt_capital), df_hsi_bt)
 
     # ════════════════════════════════════════════════════════════
     # 模式 B：全倉掃描回測
     # ════════════════════════════════════════════════════════════
     else:
-        cache_banner()
-        n_stocks = len(STOCKS)
-        st.info(
-            f"📋 將對 **{n_stocks} 隻**股票套用相同策略進行回測。"
-            f"建議先在左側 **⬇️ 批量下載** 緩存數據，速度快 10 倍。"
-        )
-        run_batch_btn = st.button(
-            f"🚀 開始全倉掃描回測（{n_stocks} 隻）", type="primary", key="run_bt_batch"
-        )
+        # ── 緩存狀態檢查 ──────────────────────────────────────
+        cache       = st.session_state.get("stock_cache", {})
+        cached_per  = st.session_state.get("cache_period", "")
+        n_cached    = len(cache)
 
-        if run_batch_btn:
+        if n_cached:
+            match_icon = "✅" if cached_per == bt_period else "⚠️"
+            match_note = "" if cached_per == bt_period else f"（緩存週期 **{cached_per}** ≠ 回測週期 **{bt_period}**，數據長度可能不足，建議重新下載）"
+            st.info(
+                f"{match_icon} 已緩存 **{n_cached}** 隻（{cached_per}，{st.session_state.get('cache_time','')} 下載）{match_note}\n\n"
+                f"回測計算純用 CPU，不需重新下載 — 等待時間屬**正常計算耗時**，非下載問題。"
+            )
+        else:
+            st.warning("⚠️ 尚未緩存數據。點擊左側 **⬇️ 批量下載全部股票** 可大幅加速。")
+
+        n_stocks = len(STOCKS)
+        if st.button(f"🚀 開始全倉掃描回測（{n_stocks} 隻）", type="primary", key="run_bt_batch"):
             if not any(buy_sigs):
                 st.warning("⚠️ 請至少勾選一個買入策略")
             elif not any(sell_sigs) and not bt_sl and not bt_tp and not bt_maxdays:
                 st.warning("⚠️ 請設定至少一種出場條件")
             else:
-                # ── 下載 / 使用緩存 ───────────────────────────
-                cache = st.session_state.get("stock_cache", {})
-                need_download = [s for s in STOCKS if s not in cache]
-                if need_download:
-                    with st.spinner(f"批量下載 {len(need_download)} 隻未緩存股票..."):
-                        extra = batch_download(need_download, period=bt_period)
+                # ── 補充下載未緩存股票 ────────────────────────
+                need_dl = [s for s in STOCKS if s not in cache]
+                if need_dl:
+                    with st.spinner(f"補充下載 {len(need_dl)} 隻未緩存股票..."):
+                        extra = batch_download(need_dl, period=bt_period)
                         cache.update(extra)
-                        st.session_state["stock_cache"] = cache
+                        st.session_state["stock_cache"]  = cache
+                        st.session_state["cache_period"] = bt_period
 
                 df_hsi_bt = get_stock_data("^HSI", period=bt_period)
 
-                # ── 逐股回測 ──────────────────────────────────
+                # ── 逐股回測（純計算，無網絡請求）────────────
                 batch_results = []
                 batch_dfs     = {}
                 batch_trades  = {}
-                pbar   = st.progress(0, text="準備中...")
-                status = st.empty()
+                n_scanned = n_with_trades = n_filtered = 0
+
+                pbar    = st.progress(0)
+                status  = st.empty()
+                counter = st.empty()
 
                 for idx, ticker in enumerate(STOCKS):
-                    pbar.progress((idx + 1) / n_stocks, text=f"回測 {ticker}  ({idx+1}/{n_stocks})")
-                    status.text(f"⏳ {ticker}")
+                    pbar.progress(
+                        (idx + 1) / n_stocks,
+                        text=f"計算 {ticker}  ({idx+1}/{n_stocks}) ── 已找到 {len(batch_results)} 隻有效結果"
+                    )
 
                     df_s = cache.get(ticker)
                     if df_s is None or df_s.empty or len(df_s) < 62:
                         continue
+                    n_scanned += 1
 
                     try:
                         trades_s, equity_s, _ = run_backtest(
@@ -1360,7 +1365,11 @@ with tabs[5]:
                             stop_loss_pct=sl_val, take_profit_pct=tp_val, max_hold_days=md_val,
                         )
                         m = calc_bt_metrics(trades_s, equity_s, float(bt_capital))
-                        if not m or m["交易次數"] < bt_min_trades:
+                        if not m:
+                            continue
+                        n_with_trades += 1
+                        if m["交易次數"] < bt_min_trades:
+                            n_filtered += 1
                             continue
                         batch_results.append({
                             "代碼":       ticker,
@@ -1377,17 +1386,36 @@ with tabs[5]:
                     except Exception:
                         continue
 
-                pbar.empty(); status.empty()
+                pbar.empty(); status.empty(); counter.empty()
 
-                if not batch_results:
-                    st.warning("⚠️ 沒有任何股票符合條件，請放寬策略或減少最少交易次數。")
+                # ── 掃描統計摘要 ──────────────────────────────
+                st.markdown(
+                    f"<div style='background:rgba(255,255,255,0.05);"
+                    f"border-left:4px solid #f9a825;"
+                    f"padding:10px 16px;border-radius:6px;font-size:14px'>"
+                    f"📋 掃描 <b>{n_scanned}</b> 隻  ｜  "
+                    f"🔔 有交易訊號 <b>{n_with_trades}</b> 隻  ｜  "
+                    f"🚫 交易次數不足 {bt_min_trades} 次（已過濾）<b>{n_filtered}</b> 隻  ｜  "
+                    f"✅ 最終顯示 <b>{len(batch_results)}</b> 隻"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+                if n_with_trades == 0:
+                    st.warning(
+                        "⚠️ **所有股票在回測期間均未觸發任何交易。**\n\n"
+                        "常見原因：\n"
+                        "- 選了多個買入條件 → 需**同時**觸發，大幅降低訊號頻率\n"
+                        "- 嘗試只選 **1 個**買入條件（如：④ KDJ超賣）\n"
+                        "- 或選 **1 個**賣出條件配合止損/止盈"
+                    )
+                elif not batch_results:
+                    st.warning(f"⚠️ 所有 {n_with_trades} 隻有訊號的股票交易次數均少於 {bt_min_trades} 次，請降低「最少交易次數」至 1。")
                 else:
                     df_rank = pd.DataFrame(batch_results)
-
-                    # 排序
-                    sort_asc = (bt_sort_col == "最大回撤%")  # 回撤越小越好
+                    sort_asc = (bt_sort_col == "最大回撤%")
                     df_rank  = df_rank.sort_values(bt_sort_col, ascending=sort_asc).reset_index(drop=True)
-                    df_rank.index += 1  # 排名從 1 開始
+                    df_rank.index += 1
 
                     n_pos = int((df_rank["總回報%"] > 0).sum())
                     n_neg = int((df_rank["總回報%"] <= 0).sum())
@@ -1399,17 +1427,14 @@ with tabs[5]:
                         f"<div style='background:rgba(255,255,255,0.05);"
                         f"border-left:4px solid #f9a825;"
                         f"padding:10px 16px;border-radius:6px;font-size:16px;font-weight:bold'>"
-                        f"📊 共回測 <b>{len(batch_results)}</b> 隻 ｜ "
-                        f"🟢 盈利 <b>{n_pos}</b> 隻 ｜ "
-                        f"🔴 虧損 <b>{n_neg}</b> 隻 ｜ "
-                        f"平均回報 <b>{avg_ret:+.2f}%</b>"
+                        f"🟢 盈利 <b>{n_pos}</b> 隻 ｜ 🔴 虧損 <b>{n_neg}</b> 隻 ｜ 平均回報 <b>{avg_ret:+.2f}%</b>"
                         f"</div>",
                         unsafe_allow_html=True,
                     )
                     st.write("")
 
-                    # ── 排行榜 ────────────────────────────────
-                    def _color_val(val):
+                    # 排行榜
+                    def _col_ret(val):
                         try:
                             v = float(val)
                             if v > 0:  return "color:#26a69a;font-weight:bold"
@@ -1420,49 +1445,44 @@ with tabs[5]:
 
                     st.dataframe(
                         df_rank.style
-                            .map(_color_val, subset=["總回報%", "勝率%", "平均每筆%"])
+                            .map(_col_ret, subset=["總回報%","勝率%","平均每筆%"])
                             .map(lambda v: "color:#ef5350;font-weight:bold"
-                                 if (isinstance(v, (int,float)) and v < -15) else "", subset=["最大回撤%"])
+                                 if (isinstance(v,(int,float)) and v < -15) else "",
+                                 subset=["最大回撤%"])
                             .format({
-                                "總回報%":   "{:+.2f}%",
-                                "勝率%":     "{:.1f}%",
-                                "夏普比率":  "{:.2f}",
-                                "最大回撤%": "{:.2f}%",
-                                "平均每筆%": "{:+.2f}%",
-                                "平均持倉天":"{:.0f}",
+                                "總回報%":    "{:+.2f}%",
+                                "勝率%":      "{:.1f}%",
+                                "夏普比率":   "{:.2f}",
+                                "最大回撤%":  "{:.2f}%",
+                                "平均每筆%":  "{:+.2f}%",
+                                "平均持倉天": "{:.0f}",
                             }),
                         use_container_width=True,
                         height=min(600, 35 * len(df_rank) + 40),
                     )
 
-                    # ── 回報分布長條圖 ────────────────────────
+                    # 回報分布圖
                     st.divider()
                     st.markdown("### 📊 回報分布")
-                    colors_bar = ["#26a69a" if v > 0 else "#ef5350"
-                                  for v in df_rank["總回報%"]]
+                    colors_bar = ["#26a69a" if v > 0 else "#ef5350" for v in df_rank["總回報%"]]
                     fig_bar = go.Figure(go.Bar(
-                        x=df_rank["代碼"],
-                        y=df_rank["總回報%"],
+                        x=df_rank["代碼"], y=df_rank["總回報%"],
                         marker_color=colors_bar,
                         text=[f"{v:+.1f}%" for v in df_rank["總回報%"]],
                         textposition="outside",
                     ))
                     fig_bar.update_layout(
-                        height=350,
-                        margin=dict(t=10, b=10),
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        plot_bgcolor="rgba(0,0,0,0)",
-                        yaxis_ticksuffix="%",
-                        xaxis_tickangle=-45,
+                        height=350, margin=dict(t=10, b=10),
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                        yaxis_ticksuffix="%", xaxis_tickangle=-45,
                     )
                     st.plotly_chart(fig_bar, use_container_width=True)
 
-                    # ── 前 N 名詳細圖表 ───────────────────────
+                    # 前 N 名 K 線圖
                     if bt_top_charts > 0:
                         st.divider()
-                        st.markdown(f"### 🎯 前 {bt_top_charts} 名 K 線標記圖")
-                        top_tickers = df_rank["代碼"].head(int(bt_top_charts)).tolist()
-                        for tk in top_tickers:
+                        st.markdown(f"### 🎯 前 {int(bt_top_charts)} 名 K 線標記圖")
+                        for tk in df_rank["代碼"].head(int(bt_top_charts)).tolist():
                             m_row = next(r for r in batch_results if r["代碼"] == tk)
                             ret   = m_row["總回報%"]
                             icon  = "🟢" if ret > 0 else "🔴"
@@ -1475,30 +1495,28 @@ with tabs[5]:
                             show_backtest_chart(batch_dfs[tk], batch_trades[tk])
                             st.write("")
 
-                    # ── 儲存結果供單股深挖 ───────────────────
-                    st.session_state["bt_batch_results"] = batch_results
-                    st.session_state["bt_batch_dfs"]     = batch_dfs
-                    st.session_state["bt_batch_trades"]  = batch_trades
-
-                    # ── 單股深挖 ──────────────────────────────
+                    # 單股深挖
                     st.divider()
                     st.markdown("### 🔬 單股深挖")
-                    drill_options = df_rank["代碼"].tolist()
-                    drill_ticker  = st.selectbox(
-                        "選擇股票查看詳細回測結果", drill_options, key="bt_drill"
+                    drill_ticker = st.selectbox(
+                        "選擇任意股票查看完整回測報告", df_rank["代碼"].tolist(), key="bt_drill"
                     )
-                    if st.button("📋 查看詳細結果", key="bt_drill_btn"):
+                    if st.button("📋 查看詳細報告", key="bt_drill_btn"):
                         d_df     = batch_dfs[drill_ticker]
                         d_trades = batch_trades[drill_ticker]
+                        # 重建 equity curve
+                        cap_tmp, pos_tmp, ep_tmp = float(bt_capital), 0, 0.0
                         d_eq_list = []
-                        cap_tmp = float(bt_capital)
-                        pos_tmp = 0
+                        t_idx = 0
+                        t_list = sorted(d_trades, key=lambda x: x["_buy_date"])
                         for i in range(len(d_df)):
-                            c2 = float(d_df["Close"].iloc[i])
-                            d_eq_list.append({"date": d_df.index[i],
-                                              "equity": cap_tmp + pos_tmp * c2})
+                            dt  = d_df.index[i]
+                            px  = float(d_df["Close"].iloc[i])
+                            cur = cap_tmp + pos_tmp * px
+                            d_eq_list.append({"date": dt, "equity": cur})
                         d_eq = pd.DataFrame(d_eq_list).set_index("date")
                         d_m  = calc_bt_metrics(d_trades, d_eq, float(bt_capital))
+                        st.divider()
                         _render_single_bt_result(
                             drill_ticker, d_m, d_eq, d_df,
                             d_trades, float(bt_capital), df_hsi_bt
