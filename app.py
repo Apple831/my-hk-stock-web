@@ -7,7 +7,7 @@ from datetime import datetime
 import requests
 import os
 
-st.set_page_config(page_title="港股狙擊手 V10.1", layout="wide")
+st.set_page_config(page_title="港股狙擊手 V10.2", layout="wide")
 
 # ══════════════════════════════════════════════════════════════════
 # ① 所有函數定義（必須在 sidebar / UI 之前）
@@ -348,8 +348,113 @@ def precompute_signals(df: pd.DataFrame) -> dict:
     return sigs
 
 
+def run_backtest(
+    df: pd.DataFrame,
+    buy_sigs: tuple, sell_sigs: tuple,
+    initial_capital: float = 100_000,
+    commission: float = 0.0015,
+    stop_loss_pct: float = None,
+    take_profit_pct: float = None,
+    max_hold_days: int = None,
+    max_positions: int = 1,
+    _precomputed: dict = None,
+) -> tuple:
+    """核心回測引擎（向量化訊號 + 多倉位）"""
+    sigs = _precomputed if _precomputed is not None else precompute_signals(df)
 
+    b_names = ["b1","b2","b3","b4","b5","b6","b7","b8","b9"]
+    s_names = ["s1","s2","s3","s4","s5","s6","s7","s8"]
+    buy_active  = [b_names[k] for k, v in enumerate(buy_sigs)  if v]
+    sell_active = [s_names[k] for k, v in enumerate(sell_sigs) if v]
 
+    if buy_active:
+        buy_signal = sigs[buy_active[0]].copy()
+        for nm in buy_active[1:]:
+            buy_signal &= sigs[nm]
+    else:
+        buy_signal = pd.Series(False, index=df.index)
+
+    if sell_active:
+        sell_signal = sigs[sell_active[0]].copy()
+        for nm in sell_active[1:]:
+            sell_signal &= sigs[nm]
+    else:
+        sell_signal = pd.Series(False, index=df.index)
+
+    buy_arr   = buy_signal.values
+    sell_arr  = sell_signal.values
+    close_arr = df["Close"].values.astype(float)
+    idx_arr   = df.index
+    capital   = initial_capital
+    positions = []
+    trades    = []
+    equity    = []
+    slot_cap  = initial_capital / max(max_positions, 1)
+
+    for i in range(61, len(df)):
+        close = close_arr[i]
+        date  = idx_arr[i]
+        portfolio_val = capital + sum(p["shares"] * close for p in positions)
+        equity.append({"date": date, "equity": portfolio_val})
+
+        if len(positions) < max_positions and buy_arr[i]:
+            avail  = min(slot_cap, capital)
+            shares = int(avail / (close * (1 + commission)))
+            if shares > 0:
+                capital -= shares * close * (1 + commission)
+                positions.append({"shares": shares, "entry_px": close,
+                                   "entry_date": date, "entry_idx": i})
+
+        keep = []
+        for pos in positions:
+            days_held = i - pos["entry_idx"]
+            ep        = pos["entry_px"]
+            reason    = None
+            if stop_loss_pct  and close <= ep * (1 - stop_loss_pct / 100):
+                reason = f"止損 -{stop_loss_pct:.0f}%"
+            elif take_profit_pct and close >= ep * (1 + take_profit_pct / 100):
+                reason = f"止盈 +{take_profit_pct:.0f}%"
+            elif max_hold_days and days_held >= max_hold_days:
+                reason = f"超時 {max_hold_days}日"
+            elif sell_arr[i]:
+                reason = "策略訊號"
+
+            if reason:
+                proceeds = pos["shares"] * close * (1 - commission)
+                pnl_pct  = (close - ep) / ep * 100
+                pnl_hkd  = proceeds - pos["shares"] * ep * (1 + commission)
+                trades.append({
+                    "買入日期": pos["entry_date"].strftime("%Y-%m-%d"),
+                    "賣出日期": date.strftime("%Y-%m-%d"),
+                    "買入價": round(ep, 3), "賣出價": round(close, 3),
+                    "回報%": round(pnl_pct, 2), "盈虧(HKD)": round(pnl_hkd, 0),
+                    "持倉天數": days_held, "賣出原因": reason,
+                    "_buy_date": pos["entry_date"], "_sell_date": date,
+                    "_win": pnl_pct > 0,
+                })
+                capital += proceeds
+            else:
+                keep.append(pos)
+        positions = keep
+
+    for pos in positions:
+        last_close = close_arr[-1]
+        proceeds   = pos["shares"] * last_close * (1 - commission)
+        pnl_pct    = (last_close - pos["entry_px"]) / pos["entry_px"] * 100
+        pnl_hkd    = proceeds - pos["shares"] * pos["entry_px"] * (1 + commission)
+        trades.append({
+            "買入日期": pos["entry_date"].strftime("%Y-%m-%d"),
+            "賣出日期": idx_arr[-1].strftime("%Y-%m-%d") + "（持倉中）",
+            "買入價": round(pos["entry_px"], 3), "賣出價": round(last_close, 3),
+            "回報%": round(pnl_pct, 2), "盈虧(HKD)": round(pnl_hkd, 0),
+            "持倉天數": len(df) - 1 - pos["entry_idx"], "賣出原因": "期末持倉",
+            "_buy_date": pos["entry_date"], "_sell_date": idx_arr[-1],
+            "_win": pnl_pct > 0,
+        })
+        capital += proceeds
+
+    equity_df = pd.DataFrame(equity).set_index("date") if equity else pd.DataFrame()
+    return trades, equity_df, capital
 
 
 def calc_bt_metrics(trades, equity_df, initial_capital):
@@ -779,7 +884,7 @@ with st.sidebar:
 # ③ 主 UI
 # ══════════════════════════════════════════════════════════════════
 STOCKS = load_stocks()
-st.title("🏹 港股狙擊手 V10.1")
+st.title("🏹 港股狙擊手 V10.0")
 tabs = st.tabs(["🌍 指數", "🏆 跑贏大市", "🟢 買入掃描", "🔴 賣出掃描", "🔍 分析", "📊 回測"])
 
 # ── TAB 0：指數 ───────────────────────────────────────────────────
@@ -1257,7 +1362,7 @@ with tabs[4]:
 
 # ── TAB 5：回測 ───────────────────────────────────────────────────
 with tabs[5]:
-    st.subheader("📊 策略回測系統 V10.0")
+    st.subheader("📊 策略回測系統 V10.2")
 
     # ── 模式切換 ─────────────────────────────────────────────────
     bt_mode = st.radio(
