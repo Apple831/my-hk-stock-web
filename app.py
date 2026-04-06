@@ -7,7 +7,7 @@ from datetime import datetime
 import requests
 import os
 
-st.set_page_config(page_title="港股狙擊手 V10.2", layout="wide")
+st.set_page_config(page_title="港股狙擊手 V10.3", layout="wide")
 
 # ══════════════════════════════════════════════════════════════════
 # ① 所有函數定義（必須在 sidebar / UI 之前）
@@ -356,10 +356,14 @@ def run_backtest(
     stop_loss_pct: float = None,
     take_profit_pct: float = None,
     max_hold_days: int = None,
-    max_positions: int = 1,
     _precomputed: dict = None,
 ) -> tuple:
-    """核心回測引擎（向量化訊號 + 多倉位）"""
+    """
+    核心回測引擎（無限倉位版）。
+    買入訊號觸發 → 用現有全部現金買入（若已滿倉則跳過）。
+    賣出訊號觸發 → 清空所有持倉。
+    沒有倉位上限：只要有現金，有訊號就入場。
+    """
     sigs = _precomputed if _precomputed is not None else precompute_signals(df)
 
     b_names = ["b1","b2","b3","b4","b5","b6","b7","b8","b9"]
@@ -385,26 +389,28 @@ def run_backtest(
     sell_arr  = sell_signal.values
     close_arr = df["Close"].values.astype(float)
     idx_arr   = df.index
+
     capital   = initial_capital
-    positions = []
+    positions = []   # 可同時存多筆（每次買入訊號各建一筆）
     trades    = []
     equity    = []
-    slot_cap  = initial_capital / max(max_positions, 1)
 
     for i in range(61, len(df)):
         close = close_arr[i]
         date  = idx_arr[i]
+
         portfolio_val = capital + sum(p["shares"] * close for p in positions)
         equity.append({"date": date, "equity": portfolio_val})
 
-        if len(positions) < max_positions and buy_arr[i]:
-            avail  = min(slot_cap, capital)
-            shares = int(avail / (close * (1 + commission)))
+        # ── 買入：有訊號 + 有現金 → 全倉買入 ────────────────────
+        if buy_arr[i] and capital > close * (1 + commission):
+            shares = int(capital / (close * (1 + commission)))
             if shares > 0:
                 capital -= shares * close * (1 + commission)
                 positions.append({"shares": shares, "entry_px": close,
                                    "entry_date": date, "entry_idx": i})
 
+        # ── 賣出：逐倉位檢查各種出場條件 ────────────────────────
         keep = []
         for pos in positions:
             days_held = i - pos["entry_idx"]
@@ -437,6 +443,7 @@ def run_backtest(
                 keep.append(pos)
         positions = keep
 
+    # ── 期末持倉強制平倉 ──────────────────────────────────────────
     for pos in positions:
         last_close = close_arr[-1]
         proceeds   = pos["shares"] * last_close * (1 - commission)
@@ -455,6 +462,8 @@ def run_backtest(
 
     equity_df = pd.DataFrame(equity).set_index("date") if equity else pd.DataFrame()
     return trades, equity_df, capital
+
+
 
 
 def calc_bt_metrics(trades, equity_df, initial_capital):
@@ -697,7 +706,6 @@ def run_grid_search(
     buy_sigs: tuple, sell_sigs: tuple,
     initial_capital: float,
     commission: float,
-    max_positions: int = 1,
     sort_metric: str = "夏普比率",
 ):
     """網格搜索最佳止損 / 止盈 / 最長持倉組合"""
@@ -722,7 +730,6 @@ def run_grid_search(
             stop_loss_pct=sl  if sl  > 0 else None,
             take_profit_pct=tp if tp > 0 else None,
             max_hold_days=md   if md  > 0 else None,
-            max_positions=max_positions,
             _precomputed=pre_s,
         )
         m = calc_bt_metrics(t, eq, initial_capital)
@@ -884,7 +891,7 @@ with st.sidebar:
 # ③ 主 UI
 # ══════════════════════════════════════════════════════════════════
 STOCKS = load_stocks()
-st.title("🏹 港股狙擊手 V10.0")
+st.title("🏹 港股狙擊手 V10.3")
 tabs = st.tabs(["🌍 指數", "🏆 跑贏大市", "🟢 買入掃描", "🔴 賣出掃描", "🔍 分析", "📊 回測"])
 
 # ── TAB 0：指數 ───────────────────────────────────────────────────
@@ -1362,7 +1369,7 @@ with tabs[4]:
 
 # ── TAB 5：回測 ───────────────────────────────────────────────────
 with tabs[5]:
-    st.subheader("📊 策略回測系統 V10.2")
+    st.subheader("📊 策略回測系統 V10.3")
 
     # ── 模式切換 ─────────────────────────────────────────────────
     bt_mode = st.radio(
@@ -1405,7 +1412,7 @@ with tabs[5]:
 
     # ── 共用：參數 ────────────────────────────────────────────
     with st.expander("⚙️ 回測參數", expanded=True):
-        p_col1, p_col2, p_col3 = st.columns(3)
+        p_col1, p_col2 = st.columns(2)
         with p_col1:
             bt_period     = st.selectbox("回測週期", ["1y", "2y", "5y"], index=1, key="bt_period")
             bt_capital    = st.number_input("初始資金 (HKD)", value=100_000, step=10_000,
@@ -1418,13 +1425,7 @@ with tabs[5]:
                                           min_value=0.0, max_value=200.0, key="bt_tp")
             bt_maxdays = st.number_input("最長持倉天數 (0=不限)", value=0, step=5,
                                           min_value=0, key="bt_maxdays")
-        with p_col3:
-            bt_max_pos = st.slider(
-                "最多同時持倉數 🏦", min_value=1, max_value=5, value=1, step=1,
-                key="bt_max_pos",
-                help="1=單倉（原模式），2-5=多倉（資金平均分配到各倉位）",
-            )
-            st.caption(f"每倉資金：HKD {int(bt_capital) // bt_max_pos:,}")
+        st.caption("💡 有買入訊號 + 有現金 → 自動全倉買入；有賣出訊號 → 逐筆平倉。無倉位數量限制。")
 
         # 只在單股模式顯示股票輸入
         if bt_mode == "🔍 單股回測":
@@ -1476,7 +1477,6 @@ with tabs[5]:
                         initial_capital=float(bt_capital),
                         commission=bt_commission,
                         stop_loss_pct=sl_val, take_profit_pct=tp_val, max_hold_days=md_val,
-                        max_positions=bt_max_pos,
                     )
                     metrics = calc_bt_metrics(trades, equity_df, float(bt_capital))
 
@@ -1501,8 +1501,7 @@ with tabs[5]:
                     st.divider()
                     st.markdown("### 🔁 網格搜索結果")
                     st.caption(
-                        f"遍歷 止損×止盈×持倉天數 共 80 種組合，策略：{bt_ticker}，"
-                        f"週期：{bt_period}，倉位：{bt_max_pos}"
+                        f"遍歷 止損×止盈×持倉天數 共 80 種組合，策略：{bt_ticker}，週期：{bt_period}"
                     )
                     gs_sort = st.selectbox(
                         "排序指標", ["夏普比率", "總回報%", "Sortino", "Calmar", "最大回撤%"],
@@ -1512,7 +1511,6 @@ with tabs[5]:
                         df_bt_gs, buy_sigs, sell_sigs,
                         initial_capital=float(bt_capital),
                         commission=bt_commission,
-                        max_positions=bt_max_pos,
                         sort_metric=gs_sort,
                     )
                     if df_gs.empty:
@@ -1607,7 +1605,6 @@ with tabs[5]:
                             initial_capital=float(bt_capital),
                             commission=bt_commission,
                             stop_loss_pct=sl_val, take_profit_pct=tp_val, max_hold_days=md_val,
-                            max_positions=bt_max_pos,
                             _precomputed=pre_s,
                         )
                         m = calc_bt_metrics(trades_s, equity_s, float(bt_capital))
@@ -1656,8 +1653,7 @@ with tabs[5]:
                         f"📊 共回測 <b>{len(batch_results)}</b> 隻 ｜ "
                         f"🟢 盈利 <b>{n_pos}</b> 隻 ｜ "
                         f"🔴 虧損 <b>{n_neg}</b> 隻 ｜ "
-                        f"平均回報 <b>{avg_ret:+.2f}%</b>　｜　"
-                        f"倉位數：<b>{bt_max_pos}</b>"
+                        f"平均回報 <b>{avg_ret:+.2f}%</b>"
                         f"</div>",
                         unsafe_allow_html=True,
                     )
