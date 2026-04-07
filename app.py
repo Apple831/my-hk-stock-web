@@ -7,7 +7,7 @@ from datetime import datetime
 import requests
 import os
 
-st.set_page_config(page_title="港股狙擊手 V10.4", layout="wide")
+st.set_page_config(page_title="港股狙擊手 V10.5", layout="wide")
 
 # ══════════════════════════════════════════════════════════════════
 # ① 所有函數定義（必須在 sidebar / UI 之前）
@@ -47,6 +47,16 @@ def flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = [str(c).strip() for c in df.columns]
     return df
 
+# ── 異常值過濾（單日成交量 >10x 或價格 >30% 變動）────────────────
+def filter_anomalies(df: pd.DataFrame) -> pd.DataFrame:
+    """移除明顯的數據錯誤：極端成交量 & 極端價格跳動"""
+    if df.empty:
+        return df
+    vol_ma = df["Volume"].rolling(20, min_periods=5).median()
+    price_chg = df["Close"].pct_change().abs()
+    bad = (df["Volume"] > vol_ma * 10) | (price_chg > 0.30)
+    return df[~bad].copy()
+
 # ── 單股下載（指數 / 分析 Tab 用）────────────────────────────────────
 def get_stock_data(ticker: str, period: str = "1y") -> pd.DataFrame:
     try:
@@ -67,7 +77,9 @@ def get_stock_data(ticker: str, period: str = "1y") -> pd.DataFrame:
             return pd.DataFrame()
         df = flatten_columns(df)
         df = normalize_index(df)
-        return df.dropna(subset=["Close"])
+        df = df.dropna(subset=["Close"])
+        df = filter_anomalies(df)   # ← 異常值過濾
+        return df
     except Exception:
         return pd.DataFrame()
 
@@ -99,9 +111,10 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["BB_mid"]   = bb_mid
     df["BB_lower"] = bb_mid - 2 * bb_std
 
+    # RSI — Wilder 平滑法（alpha=1/14），比 SMA 更標準
     delta       = df["Close"].diff()
-    gain        = delta.clip(lower=0).rolling(14).mean()
-    loss        = (-delta.clip(upper=0)).rolling(14).mean()
+    gain        = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
+    loss        = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
     rs          = gain / loss.replace(0, 1e-9)
     df["RSI"]   = 100 - (100 / (1 + rs))
 
@@ -174,12 +187,15 @@ def fetch_stocks_from_tradingview(min_cap_hkd: int = 10_000_000_000) -> list:
             {"left": "market_cap_basic",             "operation": "greater", "right": min_cap_hkd / 7.8},
             {"left": "earnings_per_share_basic_ttm", "operation": "greater", "right": 0},
             {"left": "is_primary",                   "operation": "equal",   "right": True},
+            # 流動性過濾：日均成交額 > 3000 萬港元（≈ 384 萬 USD）
+            {"left": "average_volume_30d_calc",      "operation": "greater", "right": 3_000_000 / 7.8},
         ],
         "markets": ["hongkong"],
         "symbols": {"query": {"types": ["stock"]}, "tickers": []},
-        "columns": ["name", "description", "close", "market_cap_basic", "earnings_per_share_basic_ttm"],
+        "columns": ["name", "description", "close", "market_cap_basic",
+                    "earnings_per_share_basic_ttm", "average_volume_30d_calc"],
         "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
-        "range": [0, 500],
+        "range": [0, 1000],   # 上限從 500 → 1000
     }
     resp = requests.post(TV_URL, headers=TV_HEADERS, json=payload, timeout=20)
     resp.raise_for_status()
@@ -213,15 +229,56 @@ def get_cache_label() -> str:
 
 def cache_banner():
     cache = st.session_state.get("stock_cache", {})
+    cache_dt = st.session_state.get("cache_datetime")
     if cache:
         ts = st.session_state.get("cache_time", "")
-        st.success(f"⚡ 使用緩存數據（{len(cache)} 隻，{ts} 下載）— 掃描將在數秒內完成", icon="🚀")
+        stale_warn = ""
+        if cache_dt:
+            hours_old = (datetime.now() - cache_dt).total_seconds() / 3600
+            if hours_old >= 4:
+                stale_warn = f"  ⚠️ **數據已超過 {hours_old:.0f} 小時，建議重新下載！**"
+        st.success(
+            f"⚡ 使用緩存數據（{len(cache)} 隻，{ts} 下載）— 掃描將在數秒內完成{stale_warn}",
+            icon="🚀",
+        )
     else:
         st.warning(
             "⚠️ 尚未緩存數據，掃描將逐隻下載（較慢）。"
             "建議先點擊左側 **⬇️ 批量下載全部股票** 再掃描！",
             icon="🐢",
         )
+
+
+# ── 訊號強度評分 ──────────────────────────────────────────────────
+def signal_strength_score(df: pd.DataFrame, n_signals_hit: int) -> float:
+    """
+    綜合評分（0–100）：
+      - 觸發條件數量   (0–40分)
+      - 成交量倍數     (0–30分)
+      - RSI 距離超賣區 (0–15分)
+      - J 值距離超賣區 (0–15分)
+    """
+    if df.empty or len(df) < 2:
+        return 0.0
+    c      = df.iloc[-1]
+    vol_ma = df["Volume"].rolling(20).mean().iloc[-1]
+
+    # 條件數量分（每個訊號 10 分，最高 40）
+    sig_score = min(n_signals_hit * 10, 40)
+
+    # 成交量倍數分（1x=0, 3x=30，線性）
+    vol_ratio = float(c["Volume"]) / float(vol_ma) if vol_ma > 0 else 1.0
+    vol_score = min((vol_ratio - 1) / 2 * 30, 30)
+
+    # RSI 超賣距離（RSI=30→15分, RSI=60→0分）
+    rsi_score = max(0, (30 - float(c["RSI"])) / 30 * 15) if float(c["RSI"]) <= 50 else 0
+
+    # J 值超賣距離（J=10→15分, J=50→0分）
+    j_score = max(0, (10 - float(c["J"])) / 10 * 15) if float(c["J"]) <= 50 else 0
+
+    return round(sig_score + vol_score + rsi_score + j_score, 1)
+
+
 
 # ── 繪圖 ──────────────────────────────────────────────────────────
 def show_scan_metrics(results):
@@ -282,43 +339,82 @@ def show_chart(ticker: str, df: pd.DataFrame):
     st.plotly_chart(fig, use_container_width=True)
 
 # ── 向量化信號預計算（比逐行快 8-10x）────────────────────────────
-def precompute_signals(df: pd.DataFrame) -> dict:
-    """一次性向量化計算所有買賣訊號，回傳 bool Series 字典"""
+def _swing_lows(close_ser: pd.Series, window: int = 5) -> pd.Series:
+    """向量化識別 swing low：左右各 window 根都比當前高"""
+    lo = close_ser.copy()
+    result = pd.Series(False, index=close_ser.index)
+    for k in range(1, window + 1):
+        result = result | (lo < lo.shift(k)) | (lo < lo.shift(-k))
+    # 反轉：True = 當前是局部低點（左右都比它高）
+    left_min  = close_ser.rolling(window, min_periods=window).min().shift(1)
+    right_min = close_ser[::-1].rolling(window, min_periods=window).min().shift(1)[::-1]
+    return (close_ser <= left_min) & (close_ser <= right_min)
+
+
+def precompute_signals(df: pd.DataFrame,
+                       hsi_bullish: bool = True) -> dict:
+    """
+    一次性向量化計算所有買賣訊號。
+    hsi_bullish: 恆指是否處於多頭（MA20 > MA60）；
+                 False 時過濾均值回歸買入訊號（b4/b7/b8）。
+    """
     c      = df
     p      = df.shift(1)
     vol_ma = df["Volume"].rolling(20).mean()
 
     # ── 買入訊號 ──────────────────────────────────────────────────
-    resist  = df["High"].shift(1).rolling(20).max()
+
+    # b1 突破阻力 + 放量
+    resist = df["High"].shift(1).rolling(20).max()
     b1 = (c["Close"] > resist) & (c["Volume"] > vol_ma * 1.5)
 
+    # b2 MA5 金叉 MA20
     b2 = (c["MA5"] > c["MA20"]) & (p["MA5"] <= p["MA20"])
 
-    close_min20 = df["Close"].rolling(20).min()
-    dif_min20   = df["DIF"].rolling(20).min()
-    b3 = (c["Close"] <= close_min20 * 1.005) & (c["DIF"] > dif_min20 * 1.01)
+    # b3 真正雙底背離：需要兩個 swing low，第二低點 DIF 未創新低
+    swing_lo  = _swing_lows(df["Close"], window=5)
+    prev_sl_close = df["Close"].where(swing_lo).ffill().shift(1)   # 上一個 swing low 收盤
+    prev_sl_dif   = df["DIF"].where(swing_lo).ffill().shift(1)     # 上一個 swing low DIF
+    b3 = (
+        swing_lo &                                   # 當前本身是 swing low
+        (c["Close"] < prev_sl_close) &               # 價格創新低
+        (c["DIF"]   > prev_sl_dif)  &                # DIF 未創新低（背離）
+        (c["RSI"]   < 40)                            # 處於弱勢區
+    )
 
-    b4 = c["J"] < 10
+    # b4 KDJ 超賣 J<10（熊市過濾）
+    b4_raw = c["J"] < 10
+    b4 = b4_raw if hsi_bullish else pd.Series(False, index=df.index)
 
-    b5 = c["Open"] < p["Low"]
+    # b5 缺口低開 + 確認：需要成交量放大或當日收陽
+    gap_down   = c["Open"] < p["Low"]
+    vol_up     = c["Volume"] > vol_ma * 1.2
+    close_up   = c["Close"] > c["Open"]              # 當日收陽
+    b5 = gap_down & (vol_up | close_up)              # 增加確認，避免接刀
 
+    # b6 底部突破 MA20 放量
     close_ma10  = df["Close"].rolling(10).mean().shift(1)
     ma60_ma10   = df["MA60"].rolling(10).mean().shift(1)
     was_below   = close_ma10 < ma60_ma10
     b6 = was_below & (c["Close"] > c["MA20"]) & (p["Close"] <= p["MA20"]) & (c["Volume"] > vol_ma * 1.3)
 
-    b7 = c["Close"] < c["BB_lower"]
+    # b7 布林下軌（熊市過濾）
+    b7_raw = c["Close"] < c["BB_lower"]
+    b7 = b7_raw if hsi_bullish else pd.Series(False, index=df.index)
 
-    b8 = c["RSI"] < 30
+    # b8 RSI 超賣（熊市過濾）
+    b8_raw = c["RSI"] < 30
+    b8 = b8_raw if hsi_bullish else pd.Series(False, index=df.index)
 
+    # b9 MACD 金叉
     b9 = (c["DIF"] > c["DEA"]) & (p["DIF"] <= p["DEA"])
 
     # ── 賣出訊號 ──────────────────────────────────────────────────
     s1 = c["Open"] > p["High"]
 
-    close_ma10u  = df["Close"].rolling(10).mean().shift(1)
-    ma60_ma10u   = df["MA60"].rolling(10).mean().shift(1)
-    was_above    = close_ma10u > ma60_ma10u
+    close_ma10u = df["Close"].rolling(10).mean().shift(1)
+    ma60_ma10u  = df["MA60"].rolling(10).mean().shift(1)
+    was_above   = close_ma10u > ma60_ma10u
     s2 = was_above & (c["Close"] < c["MA20"]) & (p["Close"] >= p["MA20"]) & (c["Volume"] > vol_ma * 1.3)
 
     s3 = c["Close"] > c["BB_upper"]
@@ -330,14 +426,14 @@ def precompute_signals(df: pd.DataFrame) -> dict:
     s5 = (pct_chg < -2) & (c["Volume"] > vol_ma * 1.5)
 
     s6 = (c["MA5"] < c["MA20"]) & (p["MA5"] >= p["MA20"])
-
     s7 = c["RSI"] > 70
-
     s8 = (c["DIF"] < c["DEA"]) & (p["DIF"] >= p["DEA"])
 
     # 前61行數據不足，強制設 False
     mask = pd.Series(False, index=df.index)
     mask.iloc[:61] = True
+
+
 
     sigs = {}
     for name, s in [("b1",b1),("b2",b2),("b3",b3),("b4",b4),("b5",b5),
@@ -351,8 +447,8 @@ def precompute_signals(df: pd.DataFrame) -> dict:
 def run_backtest(
     df: pd.DataFrame,
     buy_sigs: tuple, sell_sigs: tuple,
-    trade_size: float = 100_000,     # 每筆固定交易金額（互相獨立，唔共用資金池）
-    commission: float = 0.0015,
+    trade_size: float = 100_000,
+    commission: float = 0.002,        # 港股實際單向成本（含印花稅、手續費）
     stop_loss_pct: float = None,
     take_profit_pct: float = None,
     max_hold_days: int = None,
@@ -360,10 +456,9 @@ def run_backtest(
 ) -> tuple:
     """
     訊號分析模式（Signal Analyzer）：
-    - 每次買入訊號 → 自動開一筆固定金額新倉（無限資金，互相獨立）
-    - 出場條件達到 → 逐倉平倉
-    - 不追蹤資金池；結果以「平均每筆回報%」為核心指標
-    - equity_df 記錄每日累計已實現PnL（方便畫曲線）
+    - 訊號在第 i 日收盤確認，次日（i+1）以收盤價成交（消除前視偏差）
+    - 每筆固定 trade_size，互相獨立
+    - equity_df 記錄累計已實現 PnL 走勢
     """
     sigs = _precomputed if _precomputed is not None else precompute_signals(df)
 
@@ -390,32 +485,37 @@ def run_backtest(
     sell_arr  = sell_signal.values
     close_arr = df["Close"].values.astype(float)
     idx_arr   = df.index
+    n         = len(df)
 
     positions       = []   # 每筆獨立倉位
     trades          = []
-    cum_pnl_pct     = 0.0  # 累計已實現回報%（用於equity曲線）
+    cum_pnl_pct     = 0.0
     equity          = []
 
-    for i in range(61, len(df)):
+    for i in range(61, n):
         close = close_arr[i]
         date  = idx_arr[i]
 
-        # ── 每日 equity = 累計已實現PnL% + 所有持倉浮動PnL% ──────
-        open_pnl = sum((close - p["entry_px"]) / p["entry_px"] * 100
-                       for p in positions) / max(len(positions), 1) if positions else 0.0
-        equity.append({"date": date,
-                        "equity": cum_pnl_pct + open_pnl / max(len(positions), 1)
-                                   if positions else cum_pnl_pct})
+        # ── equity 追蹤 ───────────────────────────────────────────
+        equity.append({"date": date, "equity": cum_pnl_pct})
 
-        # ── 買入：有訊號 → 開新倉（固定 trade_size，唔影響其他倉）──
-        if buy_arr[i]:
-            shares = int(trade_size / (close * (1 + commission)))
+        # ── 買入：訊號在第 i 日確認，次日 (i+1) 成交 ─────────────
+        # （前視偏差修正：唔用當日收盤，用次日收盤模擬次日開盤成交）
+        if buy_arr[i] and i + 1 < n:
+            entry_px   = close_arr[i + 1]          # 次日收盤
+            entry_date = idx_arr[i + 1]
+            entry_idx  = i + 1
+            shares = int(trade_size / (entry_px * (1 + commission)))
             if shares > 0:
-                positions.append({"shares": shares, "entry_px": close,
-                                   "entry_date": date, "entry_idx": i,
-                                   "cost": shares * close * (1 + commission)})
+                positions.append({
+                    "shares":     shares,
+                    "entry_px":   entry_px,
+                    "entry_date": entry_date,
+                    "entry_idx":  entry_idx,
+                    "cost":       shares * entry_px * (1 + commission),
+                })
 
-        # ── 賣出：逐倉位獨立檢查出場條件 ─────────────────────────
+        # ── 賣出：逐倉位獨立檢查（同樣用當日收盤平倉）──────────────
         keep = []
         for pos in positions:
             days_held = i - pos["entry_idx"]
@@ -530,30 +630,18 @@ def calc_bt_metrics(trades, equity_df, trade_size=100_000):
         cur_consec = cur_consec + 1 if not t["_win"] else 0
         max_consec_loss = max(max_consec_loss, cur_consec)
 
-    # ── 夏普 / Sortino（用每筆回報%序列，近似日收益）─────────────
-    import numpy as np
-    rets = [t["回報%"] for t in closed]
-    rets_arr = np.array(rets)
-    sharpe = sortino = calmar = 0.0
-    if len(rets_arr) > 1 and rets_arr.std() > 0:
-        sharpe = float(rets_arr.mean() / rets_arr.std() * (len(rets_arr) ** 0.5))
-    down = rets_arr[rets_arr < 0]
-    if len(down) > 1 and down.std() > 0:
-        sortino = float(rets_arr.mean() / down.std() * (len(rets_arr) ** 0.5))
-
     # ── 最大回撤（基於累計回報%走勢）────────────────────────────
     max_dd = 0.0
     if not equity_df.empty:
         eq = equity_df["equity"]
         roll_max = eq.cummax()
         dd = (eq - roll_max) / roll_max * 100
-        max_dd = float(dd.min())
+        max_dd = float(dd.min()) if not eq.empty and roll_max.max() > 0 else 0.0
 
-    # 等效「總回報%」= 平均每筆 × 筆數（方便比較策略強度）
     total_ret_equiv = avg_ret * total
 
     return {
-        "平均每筆回報%":  round(avg_ret, 2),     # ⭐ 核心指標
+        "平均每筆回報%":  round(avg_ret, 2),
         "交易次數":       total,
         "勝率%":          round(win_rate, 1),
         "平均盈利%":      round(avg_win, 2),
@@ -563,12 +651,9 @@ def calc_bt_metrics(trades, equity_df, trade_size=100_000):
         "平均持倉天數":   round(avg_days, 1),
         "Profit Factor":  profit_factor,
         "最大連輸":       max_consec_loss,
-        "夏普比率":       round(sharpe, 2),
-        "Sortino比率":    round(sortino, 2),
         "最大回撤%":      round(max_dd, 2),
-        "累計回報%":      round(total_ret_equiv, 2),   # avg × N，供排行榜參考
-        # 保留兼容舊欄位名（批量排行榜用）
-        "總回報%":        round(avg_ret, 2),      # alias → 平均每筆
+        "累計回報%":      round(total_ret_equiv, 2),
+        "總回報%":        round(avg_ret, 2),
         "最終資金":       round(trade_size * (1 + avg_ret / 100), 0),
     }
 
@@ -772,11 +857,10 @@ def run_grid_search(
                 "最長持倉":   f"{md}日" if md > 0 else "不限",
                 "平均每筆%":  m["平均每筆回報%"],
                 "勝率%":      m["勝率%"],
-                "夏普比率":   m["夏普比率"],
-                "Sortino":    m["Sortino比率"],
+                "Profit F":   m["Profit Factor"],
                 "最大回撤%":  m["最大回撤%"],
                 "交易次數":   m["交易次數"],
-                "PF":         m["Profit Factor"],
+                "最大連輸":   m["最大連輸"],
             })
     pbar.empty()
 
@@ -816,20 +900,18 @@ def _render_single_bt_result(ticker, metrics, equity_df, df_bt,
     m4.metric("最佳一筆",        f"{metrics['最佳一筆%']:+.2f}%")
     m5.metric("最差一筆",        f"{metrics['最差一筆%']:+.2f}%")
 
-    # ── 第二行：風險指標 ─────────────────────────────────────────
-    a1, a2, a3, a4, a5 = st.columns(5)
+    # ── 第二行：風險指標（已移除 Sharpe/Sortino/Calmar）─────────
+    a1, a2, a3, a4 = st.columns(4)
     pf_val = metrics["Profit Factor"]
-    a1.metric("Profit Factor", "∞" if pf_val == float("inf") else f"{pf_val:.2f}")
-    a2.metric("夏普比率",      f"{metrics['夏普比率']:.2f}")
-    a3.metric("Sortino",       f"{metrics['Sortino比率']:.2f}")
-    a4.metric("最大連輸",      f"{metrics['最大連輸']} 次")
-    a5.metric("平均持倉天數",  f"{metrics['平均持倉天數']:.0f} 天")
+    a1.metric("Profit Factor",  "∞" if pf_val == float("inf") else f"{pf_val:.2f}")
+    a2.metric("最大連輸",       f"{metrics['最大連輸']} 次")
+    a3.metric("最大回撤",       f"{metrics['最大回撤%']:.2f}%")
+    a4.metric("平均持倉天數",   f"{metrics['平均持倉天數']:.0f} 天")
 
     # ── 第三行：盈虧對比 ─────────────────────────────────────────
-    b1, b2, b3 = st.columns(3)
+    b1, b2 = st.columns(2)
     b1.metric("平均盈利", f"{metrics['平均盈利%']:+.2f}%")
     b2.metric("平均虧損", f"{metrics['平均虧損%']:+.2f}%")
-    b3.metric("最大回撤", f"{metrics['最大回撤%']:.2f}%")
 
     st.divider()
     st.markdown("### 📈 累計回報走勢（每筆固定金額）")
@@ -875,7 +957,7 @@ with st.sidebar:
     st.caption(f"股票清單：{n_stocks or '讀取中'} 隻")
 
     if st.button("🔄 更新清單 (TradingView)"):
-        with st.spinner("篩選中：主要上市｜市值>100億｜EPS>0..."):
+        with st.spinner("篩選中：主要上市 ｜ 市值>100億 ｜ EPS>0 ｜ 日均成交額>3000萬..."):
             try:
                 new_stocks = fetch_stocks_from_tradingview()
                 if new_stocks:
@@ -910,8 +992,9 @@ with st.sidebar:
                 )
                 all_cache.update(batch_download(batch, period=cache_period))
             prog.empty()
-            st.session_state["stock_cache"] = all_cache
-            st.session_state["cache_time"]  = datetime.now().strftime("%H:%M")
+            st.session_state["stock_cache"]    = all_cache
+            st.session_state["cache_time"]     = datetime.now().strftime("%H:%M")
+            st.session_state["cache_datetime"] = datetime.now()
             st.success(f"✅ 完成！已緩存 {len(all_cache)} 隻股票數據")
             st.rerun()
 
@@ -925,7 +1008,7 @@ with st.sidebar:
 # ③ 主 UI
 # ══════════════════════════════════════════════════════════════════
 STOCKS = load_stocks()
-st.title("🏹 港股狙擊手 V10.4")
+st.title("🏹 港股狙擊手 V10.5")
 tabs = st.tabs(["🌍 指數", "🏆 跑贏大市", "🟢 買入掃描", "🔴 賣出掃描", "🔍 分析", "📊 回測"])
 
 # ── TAB 0：指數 ───────────────────────────────────────────────────
@@ -1043,10 +1126,20 @@ with tabs[2]:
     b8 = col_b.checkbox("⑧ RSI 超賣（RSI < 30）",       help="RSI低於30，超賣區間。比KDJ更穩定，假訊號少")
     b9 = col_b.checkbox("⑨ MACD 金叉（DIF上穿DEA）",    help="DIF 今日上穿 DEA，動能由弱轉強，中線入場訊號")
 
+    top_n_buy = st.number_input("只顯示評分最高前 N 名（0 = 全部）", value=10, min_value=0, step=5, key="top_n_buy")
+
     if st.button("🟢 開始掃描買點"):
         if not any([b1, b2, b3, b4, b5, b6, b7, b8, b9]):
             st.warning("⚠️ 請至少勾選一個策略")
         else:
+            # 恆指趨勢判斷（供 b4/b7/b8 熊市過濾用）
+            df_hsi_scan = get_stock_data("^HSI", period="3mo")
+            hsi_bull = True
+            if not df_hsi_scan.empty:
+                df_hsi_scan = calculate_indicators(df_hsi_scan)
+                hsi_bull = bool(df_hsi_scan["MA20"].iloc[-1] > df_hsi_scan["MA60"].iloc[-1])
+
+            buy_tuple = (b1,b2,b3,b4,b5,b6,b7,b8,b9)
             results, hits_dfs = [], {}
             pbar   = st.progress(0)
             status = st.empty()
@@ -1054,62 +1147,64 @@ with tabs[2]:
                 pbar.progress((i + 1) / len(STOCKS))
                 status.text(f"正在分析 {s}...")
                 df = get_cached(s)
-                if df.empty or len(df) < 60:
+                if df.empty or len(df) < 62:
                     continue
-                c, p    = df.iloc[-1], df.iloc[-2]
-                vol_avg = df["Volume"].rolling(20).mean().iloc[-1]
+                try:
+                    pre = precompute_signals(df, hsi_bullish=hsi_bull)
+                    b_names = ["b1","b2","b3","b4","b5","b6","b7","b8","b9"]
+                    n_hit = 0
+                    all_hit = True
+                    for k, flag in enumerate(buy_tuple):
+                        if flag:
+                            sig_val = bool(pre[b_names[k]].iloc[-1])
+                            if sig_val:
+                                n_hit += 1
+                            else:
+                                all_hit = False
+                                break
+                    if not all_hit or n_hit == 0:
+                        continue
 
-                checks = []
-                if b1:
-                    resist = df["High"].iloc[-21:-1].max()
-                    checks.append(bool(c["Close"] > resist) and bool(c["Volume"] > vol_avg * 1.5))
-                if b2:
-                    checks.append(bool(c["MA5"] > c["MA20"]) and bool(p["MA5"] <= p["MA20"]))
-                if b3:
-                    pl = df["Close"].iloc[-20:].min()
-                    dl = df["DIF"].iloc[-20:].min()
-                    checks.append(bool(c["Close"] <= pl * 1.005) and bool(c["DIF"] > dl * 1.01))
-                if b4:
-                    checks.append(bool(c["J"] < 10))
-                if b5:
-                    checks.append(bool(c["Open"] < p["Low"]))
-                if b6:
-                    was_below = bool(df["Close"].iloc[-10:-1].mean() < df["MA60"].iloc[-10:-1].mean())
-                    checks.append(was_below and bool(c["Close"] > c["MA20"]) and
-                                  bool(p["Close"] <= p["MA20"]) and bool(c["Volume"] > vol_avg * 1.3))
-                if b7:
-                    checks.append(bool(c["Close"] < c["BB_lower"]))
-                if b8:
-                    checks.append(bool(c["RSI"] < 30))
-                if b9:
-                    checks.append(bool(c["DIF"] > c["DEA"]) and bool(p["DIF"] <= p["DEA"]))
-
-                if checks and all(checks):
-                    pct      = ((c["Close"] - p["Close"]) / p["Close"]) * 100
-                    bb_range = c["BB_upper"] - c["BB_lower"]
-                    bb_pct   = (c["Close"] - c["BB_lower"]) / bb_range * 100 if bb_range > 0 else 50
+                    c   = df.iloc[-1]
+                    p   = df.iloc[-2]
+                    pct = (float(c["Close"]) - float(p["Close"])) / float(p["Close"]) * 100
+                    bb_range = float(c["BB_upper"]) - float(c["BB_lower"])
+                    bb_pct   = (float(c["Close"]) - float(c["BB_lower"])) / bb_range * 100 if bb_range > 0 else 50
+                    score    = signal_strength_score(df, n_hit)
                     results.append({
                         "代碼":   s,
+                        "評分":   score,
                         "現價":   round(float(c["Close"]), 2),
-                        "漲跌%":  round(float(pct), 2),
+                        "漲跌%":  round(pct, 2),
                         "RSI":    round(float(c["RSI"]), 1),
                         "J值":    round(float(c["J"]), 1),
                         "BB位置": f"{bb_pct:.0f}%",
+                        "訊號數": n_hit,
                     })
                     hits_dfs[s] = df
+                except Exception:
+                    continue
 
             status.empty(); pbar.empty()
             if results:
-                st.success(f"✅ 發現 {len(results)} 個買入標的")
+                results.sort(key=lambda x: x["評分"], reverse=True)
+                if top_n_buy > 0:
+                    results = results[:int(top_n_buy)]
+                hsi_label = "🟢 多頭" if hsi_bull else "🔴 空頭（b4/b7/b8 已過濾）"
+                st.success(f"✅ 發現 {len(results)} 個買入標的　｜　恆指趨勢：{hsi_label}")
                 show_scan_metrics(results)
                 st.divider()
                 df_show = pd.DataFrame(results)
                 df_show["現價"]  = df_show["現價"].map(lambda x: f"{x:.2f}")
                 df_show["漲跌%"] = df_show["漲跌%"].map(lambda x: f"{'+' if x>=0 else ''}{x:.2f}%")
                 df_show["J值"]   = df_show["J值"].map(lambda x: f"{x:.1f}")
-                st.dataframe(df_show, use_container_width=True)
-                for s in hits_dfs:
-                    st.write(f"### 🎯 {s}")
+                st.dataframe(
+                    df_show.style.background_gradient(subset=["評分"], cmap="Greens"),
+                    use_container_width=True,
+                )
+                for r in results:
+                    s = r["代碼"]
+                    st.write(f"### 🎯 {s}　評分 {r['評分']}")
                     show_chart(s, hits_dfs[s])
             else:
                 st.warning("⚠️ 沒有符合條件的股票，請嘗試減少勾選的條件數量。")
@@ -1403,7 +1498,7 @@ with tabs[4]:
 
 # ── TAB 5：回測 ───────────────────────────────────────────────────
 with tabs[5]:
-    st.subheader("📊 策略回測系統")
+    st.subheader("📊 策略回測系統 V10.5")
 
     # ── 模式切換 ─────────────────────────────────────────────────
     bt_mode = st.radio(
@@ -1452,7 +1547,7 @@ with tabs[5]:
             bt_capital    = st.number_input("每筆交易金額 (HKD)", value=100_000, step=10_000,
                                              min_value=10_000, key="bt_capital",
                                              help="每次買入訊號觸發時的固定投入金額，各筆互相獨立")
-            bt_commission = st.slider("佣金率 (%)", 0.0, 0.5, 0.15, 0.05, key="bt_commission") / 100
+            bt_commission = st.slider("佣金率 (%, 港股建議 0.20)", 0.0, 0.5, 0.20, 0.05, key="bt_commission") / 100
         with p_col2:
             bt_sl      = st.number_input("止損 % (0=不啟用)",       value=0.0, step=1.0,
                                           min_value=0.0, max_value=50.0,  key="bt_sl")
@@ -1473,7 +1568,7 @@ with tabs[5]:
             )
             bt_sort_col = st.selectbox(
                 "排行榜排序依據",
-                ["平均每筆%", "勝率%", "夏普比率", "交易次數", "最大回撤%"],
+                ["平均每筆%", "勝率%", "Profit F", "交易次數", "最大回撤%"],
                 key="bt_sort_col",
             )
             bt_top_charts = st.number_input(
@@ -1539,7 +1634,7 @@ with tabs[5]:
                         f"遍歷 止損×止盈×持倉天數 共 80 種組合，策略：{bt_ticker}，週期：{bt_period}"
                     )
                     gs_sort = st.selectbox(
-                        "排序指標", ["平均每筆%", "勝率%", "夏普比率", "Sortino", "最大回撤%"],
+                        "排序指標", ["平均每筆%", "勝率%", "Profit F", "交易次數", "最大回撤%"],
                         key="gs_sort"
                     )
                     df_gs = run_grid_search(
@@ -1568,10 +1663,8 @@ with tabs[5]:
                                 .format({
                                     "平均每筆%": "{:+.2f}%",
                                     "勝率%":     "{:.1f}%",
-                                    "夏普比率":  "{:.2f}",
-                                    "Sortino":   "{:.2f}",
                                     "最大回撤%": "{:.2f}%",
-                                    "PF":        "{:.2f}",
+                                    "Profit F":  "{:.2f}",
                                 }),
                             use_container_width=True,
                             hide_index=True,
@@ -1648,10 +1741,9 @@ with tabs[5]:
                             "平均每筆%":  m["平均每筆回報%"],
                             "勝率%":      m["勝率%"],
                             "交易次數":   m["交易次數"],
-                            "夏普比率":   m["夏普比率"],
-                            "Sortino":    m["Sortino比率"],
-                            "Calmar":     m["Calmar比率"],
+                            "Profit F":   m["Profit Factor"],
                             "最大回撤%":  m["最大回撤%"],
+                            "最大連輸":   m["最大連輸"],
                             "平均持倉天": m["平均持倉天數"],
                         })
                         batch_dfs[ticker]      = df_s
@@ -1708,9 +1800,7 @@ with tabs[5]:
                             .format({
                                 "平均每筆%": "{:+.2f}%",
                                 "勝率%":     "{:.1f}%",
-                                "夏普比率":  "{:.2f}",
-                                "Sortino":   "{:.2f}",
-                                "Calmar":    "{:.2f}",
+                                "Profit F":  "{:.2f}",
                                 "最大回撤%": "{:.2f}%",
                                 "平均持倉天":"{:.0f}",
                             }),
@@ -1755,7 +1845,7 @@ with tabs[5]:
                                 f"**{icon} {tk}**　平均每筆 {ret:+.2f}%　"
                                 f"勝率 {m_row['勝率%']:.1f}%　"
                                 f"交易 {m_row['交易次數']} 次　"
-                                f"夏普 {m_row['夏普比率']:.2f}"
+                                f"PF {m_row['Profit F']:.2f}"
                             )
                             show_backtest_chart(batch_dfs[tk], batch_trades[tk])
                             st.write("")
