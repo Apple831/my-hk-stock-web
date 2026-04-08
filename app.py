@@ -174,13 +174,21 @@ TV_HEADERS = {
     "Referer": "https://www.tradingview.com/",
 }
 
-def fetch_stocks_from_tradingview(min_cap_hkd: int = 10_000_000_000) -> list:
+def fetch_stocks_from_tradingview(
+    min_cap_hkd: int = 10_000_000_000,
+    min_vol_hkd: int = 50_000_000,
+) -> list:
+    """
+    篩選港股宇宙。
+    移除 is_primary：保留二次上市 / 雙重主要上市（阿里、京東、百度等）。
+    改用更高流動性門檻替代（預設日均成交額 5000 萬港元）。
+    """
     payload = {
         "filter": [
             {"left": "market_cap_basic",             "operation": "greater", "right": min_cap_hkd / 7.8},
             {"left": "earnings_per_share_basic_ttm", "operation": "greater", "right": 0},
-            {"left": "is_primary",                   "operation": "equal",   "right": True},
-            {"left": "average_volume_30d_calc",      "operation": "greater", "right": 3_000_000 / 7.8},
+            # 流動性過濾（取代 is_primary）：日均成交額 > min_vol_hkd 港元
+            {"left": "average_volume_30d_calc",      "operation": "greater", "right": min_vol_hkd / 7.8},
         ],
         "markets": ["hongkong"],
         "symbols": {"query": {"types": ["stock"]}, "tickers": []},
@@ -1025,15 +1033,29 @@ with st.sidebar:
     n_stocks = len(st.session_state.get("stocks", []))
     st.caption(f"股票清單：{n_stocks or '讀取中'} 隻")
 
+    # 篩選參數（在按鈕前讓用戶調整）
+    tv_min_cap = st.selectbox(
+        "最低市值", ["50億", "100億", "500億"],
+        index=1, key="tv_min_cap"
+    )
+    tv_min_vol = st.selectbox(
+        "日均成交額下限", ["3000萬", "5000萬", "1億"],
+        index=1, key="tv_min_vol"
+    )
+    _cap_map = {"50億": 5_000_000_000, "100億": 10_000_000_000, "500億": 50_000_000_000}
+    _vol_map = {"3000萬": 30_000_000, "5000萬": 50_000_000, "1億": 100_000_000}
+
     if st.button("🔄 更新清單 (TradingView)"):
-        with st.spinner("篩選中：主要上市 ｜ 市值>100億 ｜ EPS>0 ｜ 日均成交額>3000萬..."):
+        _cap = _cap_map[tv_min_cap]
+        _vol = _vol_map[tv_min_vol]
+        with st.spinner(f"篩選中：港股全宇宙（含二次上市）｜ 市值>{tv_min_cap} ｜ EPS>0 ｜ 日均成交額>{tv_min_vol}..."):
             try:
-                new_stocks = fetch_stocks_from_tradingview()
+                new_stocks = fetch_stocks_from_tradingview(min_cap_hkd=_cap, min_vol_hkd=_vol)
                 if new_stocks:
                     st.session_state["stocks"] = new_stocks
                     st.session_state.pop("stock_cache", None)
                     st.session_state.pop("cache_time", None)
-                    st.success(f"✅ 已更新！共 {len(new_stocks)} 隻")
+                    st.success(f"✅ 已更新！共 {len(new_stocks)} 隻（含二次上市）")
                     st.rerun()
                 else:
                     st.warning("⚠️ 沒有取得數據")
