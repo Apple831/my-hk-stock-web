@@ -1407,7 +1407,14 @@ with tabs[2]:
                 df_show["漲跌%"] = df_show["漲跌%"].map(lambda x: f"{'+' if x>=0 else ''}{x:.2f}%")
                 df_show["J值"]   = df_show["J值"].map(lambda x: f"{x:.1f}")
                 st.dataframe(
-                    df_show.style.background_gradient(subset=["評分"], cmap="Greens"),
+                    df_show.style.map(
+                        lambda v: (
+                            f"background-color:rgba(38,166,154,{min(float(v),100)/100*0.6+0.1:.2f});"
+                            f"color:#fff;font-weight:bold"
+                            if isinstance(v, (int, float)) else ""
+                        ),
+                        subset=["評分"]
+                    ),
                     use_container_width=True,
                 )
                 for r in results:
