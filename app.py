@@ -135,17 +135,26 @@ def normalize_index(df: pd.DataFrame) -> pd.DataFrame:
 # ── MultiIndex 展平（新版 yfinance 常見）─────────────────────────────
 def flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
     if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [col[0] if col[1] == "" else col[0] for col in df.columns]
+        df.columns = [col[0] if col[1] == "" else col[1] for col in df.columns]
     df.columns = [str(c).strip() for c in df.columns]
     return df
 
 # ── 異常值過濾（單日成交量 >10x 或價格 >30% 變動）────────────────
 def filter_anomalies(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    移除明顯數據錯誤：
+    - 成交量 > 20日中位數 × 10（只在 vol_ma 有效時過濾）
+    - 單日價格變動 > 50%（放寬至50%，避免誤殺新股或高波動股）
+    注意：min_periods=10 確保至少10行才計算 vol_ma，保護短期數據
+    """
     if df.empty:
         return df
-    vol_ma = df["Volume"].rolling(20, min_periods=5).median()
+    vol_ma    = df["Volume"].rolling(20, min_periods=10).median()
     price_chg = df["Close"].pct_change().abs()
-    bad = (df["Volume"] > vol_ma * 10) | (price_chg > 0.30)
+    # 只在 vol_ma 有效（非NaN）時才過濾成交量異常
+    vol_bad   = vol_ma.notna() & (df["Volume"] > vol_ma * 10)
+    price_bad = price_chg > 0.50
+    bad = vol_bad | price_bad
     return df[~bad].copy()
 
 # ── 單股下載 ────────────────────────────────────────────────────────
@@ -349,16 +358,15 @@ def cache_banner():
 # ══════════════════════════════════════════════════════════════════
 def _swing_lows(close_ser: pd.Series, window: int = 5) -> pd.Series:
     """
-    向量化識別 swing low：
-    當前收盤 <= 左側 window 根最小值 AND <= 右側 window 根最小值。
-    注意：右側用 shift(-window) 後 rolling，末尾 window 根會是 NaN → 填 False。
+    向量化識別 swing low（無前視偏差版）：
+    當前收盤 = 過去 (window+1) 根中的最小值（含當前，不含未來）。
+    不使用右側未來數據，避免回測前視偏差。
+    代價：識別稍滯後，但邏輯嚴謹。
     """
-    # 左側：前 window 根的最小值（不含當前）
-    left_min  = close_ser.shift(1).rolling(window, min_periods=window).min()
-    # 右側：後 window 根的最小值（不含當前），反轉 rolling 後再反轉回來
-    right_min = close_ser[::-1].shift(1).rolling(window, min_periods=window).min()[::-1]
-
-    is_swing_low = (close_ser <= left_min) & (close_ser <= right_min)
+    # 過去 window 根（不含當前）的最小值
+    left_min = close_ser.rolling(window + 1, min_periods=window + 1).min()
+    # 當前必須 <= 過去 window 根最小值（即為滾動窗口內最低點）
+    is_swing_low = close_ser <= left_min
     return is_swing_low.fillna(False)
 
 
@@ -367,18 +375,20 @@ def _swing_lows(close_ser: pd.Series, window: int = 5) -> pd.Series:
 # 原版只看量比大小，放量急跌也會得高分。
 # 現在加入「收陽確認」條件，只有收陽放量才給滿分。
 # ══════════════════════════════════════════════════════════════════
-def signal_strength_score(df: pd.DataFrame, n_signals_hit: int) -> float:
+def signal_strength_score(df: pd.DataFrame, n_signals_hit: int,
+                           vol_ma_last: float = None) -> float:
     """
     綜合評分（0–100）：
       - 觸發條件數量        (0–40分)
-      - 成交量倍數 × 方向    (0–30分)  ← FIX：加入收陽確認
+      - 成交量倍數 × 方向    (0–30分)
       - RSI 距離超賣區       (0–15分)
       - J 值距離超賣區       (0–15分)
+    vol_ma_last: 可傳入已計算的 vol_ma 最後一值，避免重複 rolling 計算
     """
     if df.empty or len(df) < 2:
         return 0.0
     c      = df.iloc[-1]
-    vol_ma = df["Volume"].rolling(20).mean().iloc[-1]
+    vol_ma = vol_ma_last if vol_ma_last is not None else df["Volume"].rolling(20).mean().iloc[-1]
 
     # 條件數量分（每個訊號 10 分，最高 40）
     sig_score = min(n_signals_hit * 10, 40)
@@ -526,9 +536,10 @@ def precompute_signals(df: pd.DataFrame,
     b8 = c["MA20"] > c["MA60"]
 
     # b9 52 週新高突破（NEW）
-    # 動能因子：接近或突破 52 週高點，強者恆強
-    high_52w = df["High"].rolling(min(252, len(df))).max().shift(1)
-    b9 = c["Close"] >= high_52w * 0.98
+    # 動能因子：收盤接近或突破過去252日收盤最高點，強者恆強
+    # 統一用 Close（避免 High 盤中極值造成的邏輯不一致）
+    close_52w_high = df["Close"].rolling(min(252, len(df)), min_periods=60).max().shift(1)
+    b9 = c["Close"] >= close_52w_high * 0.98
 
     # b10 縮量回調至 MA20（NEW）
     # 上升趨勢中的低風險加倉點：個股向上，回調到 MA20 附近，成交量萎縮（無恐慌拋售）
@@ -615,9 +626,11 @@ def run_backtest(
         buy_signal = pd.Series(False, index=df.index)
 
     if sell_active:
+        # 賣出用 OR 邏輯：任一條件觸發即出場
+        # （AND 邏輯幾乎不可能同時觸發，會導致持倉永不賣出）
         sell_signal = sigs[sell_active[0]].copy()
         for nm in sell_active[1:]:
-            sell_signal &= sigs[nm]
+            sell_signal |= sigs[nm]
     else:
         sell_signal = pd.Series(False, index=df.index)
 
@@ -642,8 +655,8 @@ def run_backtest(
         # 先記錄今日的已實現累計（賣出平倉後才更新，所以先記昨日值）
         # → 我們在迴圈末尾記錄，這樣當日賣出的利潤會反映在當日
 
-        # 買入
-        if buy_arr[i] and i + 1 < n:
+        # 買入（跳過最後一天：避免 entry=last_close → 強制平倉也=last_close → 0%幽靈交易）
+        if buy_arr[i] and i + 1 < n - 1:
             entry_px   = close_arr[i + 1]
             entry_date = idx_arr[i + 1]
             entry_idx  = i + 1
@@ -731,15 +744,21 @@ def calc_bt_metrics(trades, equity_df, trade_size=100_000):
     losses = total - wins
     win_rate = wins / total * 100
 
-    avg_ret  = sum(t["回報%"] for t in closed) / total
-    avg_win  = sum(t["回報%"] for t in closed if t["_win"])  / wins   if wins   else 0.0
-    avg_loss = sum(t["回報%"] for t in closed if not t["_win"]) / losses if losses else 0.0
-    avg_days = sum(t["持倉天數"] for t in closed) / total
-    best_trade  = max(t["回報%"] for t in closed)
-    worst_trade = min(t["回報%"] for t in closed)
+    # PERF: single pass over closed trades, extract arrays once
+    rets     = [t["回報%"]     for t in closed]
+    days_arr = [t["持倉天數"]  for t in closed]
+    wins_arr = [t["回報%"] for t in closed if t["_win"]]
+    loss_arr = [t["回報%"] for t in closed if not t["_win"]]
 
-    gross_win  = sum(t["回報%"] for t in closed if t["_win"])
-    gross_loss = abs(sum(t["回報%"] for t in closed if not t["_win"]))
+    avg_ret     = sum(rets)  / total
+    avg_win     = sum(wins_arr) / wins   if wins   else 0.0
+    avg_loss    = sum(loss_arr) / losses if losses else 0.0
+    avg_days    = sum(days_arr) / total
+    best_trade  = max(rets)
+    worst_trade = min(rets)
+
+    gross_win  = sum(wins_arr)
+    gross_loss = abs(sum(loss_arr))
     profit_factor = round(gross_win / gross_loss, 2) if gross_loss > 0 else (
         float("inf") if gross_win > 0 else 0.0)
 
@@ -798,29 +817,34 @@ def show_backtest_chart(df: pd.DataFrame, trades: list):
         line=dict(width=1, color="rgba(100,180,255,0.5)", dash="dot"),
         fill="tonexty", fillcolor="rgba(100,180,255,0.05)"), row=1, col=1)
 
+    # PERF: batch all buy/sell markers into 2 traces instead of 2×N traces
+    buy_x, buy_y = [], []
+    sell_win_x, sell_win_y = [], []
+    sell_loss_x, sell_loss_y = [], []
+    df_index_set = set(df.index)
     for t in trades:
-        bd = t["_buy_date"]
-        sd = t["_sell_date"]
-        win = t["_win"]
-        if bd in df.index:
-            fig.add_trace(go.Scatter(
-                x=[bd], y=[float(df.loc[bd, "Low"]) * 0.985],
-                mode="markers+text",
-                marker=dict(symbol="triangle-up", size=12, color="#00e676"),
-                text=["買"], textposition="bottom center",
-                textfont=dict(size=9, color="#00e676"),
-                showlegend=False,
-            ), row=1, col=1)
-        if sd in df.index:
-            marker_color = "#26a69a" if win else "#ef5350"
-            fig.add_trace(go.Scatter(
-                x=[sd], y=[float(df.loc[sd, "High"]) * 1.015],
-                mode="markers+text",
-                marker=dict(symbol="triangle-down", size=12, color=marker_color),
-                text=["賣"], textposition="top center",
-                textfont=dict(size=9, color=marker_color),
-                showlegend=False,
-            ), row=1, col=1)
+        bd, sd, win = t["_buy_date"], t["_sell_date"], t["_win"]
+        if bd in df_index_set:
+            buy_x.append(bd)
+            buy_y.append(float(df.loc[bd, "Low"]) * 0.985)
+        if sd in df_index_set:
+            (sell_win_x if win else sell_loss_x).append(sd)
+            (sell_win_y if win else sell_loss_y).append(float(df.loc[sd, "High"]) * 1.015)
+    if buy_x:
+        fig.add_trace(go.Scatter(x=buy_x, y=buy_y, mode="markers+text",
+            marker=dict(symbol="triangle-up", size=12, color="#00e676"),
+            text=["買"]*len(buy_x), textposition="bottom center",
+            textfont=dict(size=9, color="#00e676"), showlegend=False), row=1, col=1)
+    if sell_win_x:
+        fig.add_trace(go.Scatter(x=sell_win_x, y=sell_win_y, mode="markers+text",
+            marker=dict(symbol="triangle-down", size=12, color="#26a69a"),
+            text=["賣"]*len(sell_win_x), textposition="top center",
+            textfont=dict(size=9, color="#26a69a"), showlegend=False), row=1, col=1)
+    if sell_loss_x:
+        fig.add_trace(go.Scatter(x=sell_loss_x, y=sell_loss_y, mode="markers+text",
+            marker=dict(symbol="triangle-down", size=12, color="#ef5350"),
+            text=["賣"]*len(sell_loss_x), textposition="top center",
+            textfont=dict(size=9, color="#ef5350"), showlegend=False), row=1, col=1)
 
     v_colors = ["#26a69a" if c >= o else "#ef5350"
                 for c, o in zip(df["Close"], df["Open"])]
