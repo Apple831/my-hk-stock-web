@@ -135,7 +135,7 @@ def normalize_index(df: pd.DataFrame) -> pd.DataFrame:
 # ── MultiIndex 展平（新版 yfinance 常見）─────────────────────────────
 def flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
     if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [col[0] if col[1] == "" else col[1] for col in df.columns]
+        df.columns = [col[0] for col in df.columns]
     df.columns = [str(c).strip() for c in df.columns]
     return df
 
