@@ -10,6 +10,99 @@ import os
 st.set_page_config(page_title="港股狙擊手 V10.8", layout="wide")
 
 # ══════════════════════════════════════════════════════════════════
+# 命名策略組合（Presets）
+# ──────────────────────────────────────────────────────────────────
+# buy_sigs  tuple 順序：b1 b2 b3 b4 b5 b6 b7 b8 b9 b10
+# sell_sigs tuple 順序：s1 s2 s3 s4 s5 s6 s7
+# ══════════════════════════════════════════════════════════════════
+STRATEGY_PRESETS = {
+    "🔥 趨勢動能（52週新高）": {
+        "desc":    "追強勢股：52週新高突破 + 突破放量，頭部跌破MA20離場。\n適合牛市，勝率最高。",
+        "buy":  (True,  False, False, False, False, False, False, False, True,  False),
+        #        b1=突破放量                                              b9=52週新高
+        "sell": (True,  False, False, True,  False, False, False),
+        #        s1=頭部跌破MA20               s4=放量急跌
+    },
+    "🎯 趨勢回調低吸": {
+        "desc":    "上升趨勢中縮量回調至MA20，低風險加倉點。\n每筆風險最小，適合中線持有。",
+        "buy":  (False, False, False, False, False, False, False, True,  False, True),
+        #                                                        b8=趨勢確認        b10=縮量回調
+        "sell": (True,  False, False, False, False, True,  False),
+        #        s1=頭部跌破MA20                      s6=MACD死叉
+    },
+    "💎 底部背離反轉": {
+        "desc":    "底背離 + MACD金叉確認，中線底部建倉。\n訊號少但準，需要耐心等待。",
+        "buy":  (False, False, True,  False, False, False, True,  False, False, False),
+        #                       b3=底背離                    b7=MACD金叉
+        "sell": (False, False, False, False, False, True,  True),
+        #                                          s6=MACD死叉  s7=三日陰線
+    },
+    "⚡ 突破確認": {
+        "desc":    "個股趨勢向上 + 突破放量，雙重確認減少假突破。\n中短線皆宜。",
+        "buy":  (True,  False, False, False, False, False, False, True,  False, False),
+        #        b1=突破放量                                    b8=趨勢確認
+        "sell": (True,  False, False, True,  False, False, False),
+        #        s1=頭部跌破MA20               s4=放量急跌
+    },
+    "🏗️ 底部形態完成": {
+        "desc":    "底部形態突破MA20 + MACD金叉，等形態完全確認才入場。\n較保守，適合風險較低的操作。",
+        "buy":  (False, False, False, True,  False, False, True,  False, False, False),
+        #                              b4=底部突破MA20          b7=MACD金叉
+        "sell": (True,  False, False, False, False, True,  False),
+        #        s1=頭部跌破MA20                      s6=MACD死叉
+    },
+}
+
+PRESET_NAMES    = ["✏️ 自定義"] + list(STRATEGY_PRESETS.keys())
+PRESET_CUSTOM   = "✏️ 自定義"
+
+
+def get_preset_sigs(preset_name: str, buy_custom: tuple, sell_custom: tuple):
+    """
+    回傳 (buy_sigs, sell_sigs)。
+    preset_name == PRESET_CUSTOM 時使用用戶自定義的 checkbox 值。
+    """
+    if preset_name == PRESET_CUSTOM:
+        return buy_custom, sell_custom
+    p = STRATEGY_PRESETS[preset_name]
+    return p["buy"], p["sell"]
+
+
+def preset_selector(key_prefix: str):
+    """
+    渲染 Preset 下拉 + 描述卡片。
+    回傳 (preset_name, show_custom_checkboxes)。
+    """
+    preset = st.selectbox(
+        "⚡ 快速選擇策略組合",
+        PRESET_NAMES,
+        key=f"{key_prefix}_preset",
+        help="選擇預設組合一鍵套用，或選「自定義」自行勾選策略",
+    )
+    if preset != PRESET_CUSTOM:
+        p = STRATEGY_PRESETS[preset]
+        buy_labels  = ["①突破放量","②MA5金叉","③底背離","④底部突破",
+                       "⑤布林下軌","⑥RSI超賣","⑦MACD金叉","⑧趨勢確認","⑨52週新高","⑩縮量回調"]
+        sell_labels = ["⑪頭部破MA20","⑫布林上軌","⑬縮量頂部","⑭放量急跌",
+                       "⑮RSI超買","⑯MACD死叉","⑰三日陰線"]
+        active_buy  = [buy_labels[i]  for i, v in enumerate(p["buy"])  if v]
+        active_sell = [sell_labels[i] for i, v in enumerate(p["sell"]) if v]
+        st.markdown(
+            f"<div style='background:rgba(255,255,255,0.05);"
+            f"border-left:3px solid #f9a825;"
+            f"padding:8px 14px;border-radius:5px;margin:4px 0 8px 0'>"
+            f"<div style='font-size:13px;opacity:0.85'>{p['desc'].replace(chr(10), '<br>')}</div>"
+            f"<div style='margin-top:6px;font-size:12px'>"
+            f"🟢 買入：{'、'.join(active_buy) or '無'}　　"
+            f"🔴 賣出：{'、'.join(active_sell) or '無（只靠止損出場）'}"
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
+        return preset, False   # 不顯示自定義 checkbox
+    return preset, True        # 顯示自定義 checkbox
+
+
+# ══════════════════════════════════════════════════════════════════
 # ① 所有函數定義（必須在 sidebar / UI 之前）
 # ══════════════════════════════════════════════════════════════════
 
@@ -1209,41 +1302,44 @@ with tabs[2]:
     st.subheader("🟢 買入策略掃描")
     cache_banner()
 
-    with st.expander("💡 策略組合建議（點擊展開）", expanded=True):
-        st.markdown("""
-        > 勾選**多個策略**可提高訊號可靠度。以下是針對港股優化的組合：
+    _t2_preset, _t2_custom = preset_selector("tab2")
 
-        | 組合 | 勾選策略 | 適用場景 | 勝率參考 |
-        |------|---------|---------|---------|
-        | 🔥 **趨勢動能** | ⑨ 52週新高 ＋ ① 突破放量 | 追強勢股，牛市首選 | ⭐⭐⭐⭐⭐ |
-        | 🎯 **趨勢回調低吸** | ⑩ 縮量回調 ＋ ⑧ 趨勢確認 | 上升趨勢中低風險加碼 | ⭐⭐⭐⭐⭐ |
-        | 💎 **底部背離反轉** | ③ 底背離 ＋ ⑦ MACD金叉 | 中線底部建倉，需耐心 | ⭐⭐⭐⭐ |
-        | ⚡ **突破確認** | ① 突破放量 ＋ ⑧ 趨勢確認 | 趨勢中的有效突破 | ⭐⭐⭐⭐ |
-        | 🏗️ **底部形態完成** | ④ 底部突破MA20 ＋ ⑦ MACD金叉 | 底部形態確認後入場 | ⭐⭐⭐⭐ |
+    if _t2_custom:
+        st.caption("勾選一個或多個策略（多個條件需同時符合）")
+        col_a, col_b = st.columns(2)
+        b1  = col_a.checkbox("① 突破阻力位 + 成交量放大",      help="收盤 > 前20日最高價，且成交量 > 20日均量 1.5 倍")
+        b2  = col_a.checkbox("② MA5 金叉 MA20",                help="5日均線今日上穿20日均線（趨勢轉強）")
+        b3  = col_a.checkbox("③ 底背離（價創新低 MACD未）",     help="swing low 背離：價格新低但 DIF 未新低，RSI < 40")
+        b4  = col_a.checkbox("④ 底部形態突破（放量站上MA20）",  help="近期均線低位，今日放量站上 MA20，底部確認")
+        b5  = col_a.checkbox("⑤ 布林帶下軌買入（牛市過濾）",    help="收盤跌穿布林下軌。注意：熊市自動停用，避免接刀")
+        b6  = col_b.checkbox("⑥ RSI 超賣（< 30，牛市過濾）",   help="RSI 低於 30。注意：熊市自動停用")
+        b7  = col_b.checkbox("⑦ MACD 金叉（DIF上穿DEA）",      help="DIF 今日上穿 DEA，動能由弱轉強，中線入場訊號")
+        b8  = col_b.checkbox("⑧ 個股趨勢確認（MA20 > MA60）",  help="【推薦常開】確保個股本身在上升趨勢")
+        b9  = col_b.checkbox("⑨ 52週新高突破",                  help="【動能策略】接近或突破52週高點，強者恆強")
+        b10 = col_b.checkbox("⑩ 縮量回調至 MA20",              help="【低風險入場】上升趨勢中回調至MA20附近且成交量萎縮")
+        _t2_buy_custom  = (b1,b2,b3,b4,b5,b6,b7,b8,b9,b10)
+    else:
+        _t2_buy_custom = (False,)*10
 
-        **⚠️ 不建議組合：**
-        - ③ 底背離 ＋ ① 突破放量 → 邏輯矛盾（底部 vs 突破）
-        - ⑤ 布林下軌 或 ⑥ RSI超賣 單獨使用 → 趨勢下行時會持續虧損，必須配合 ⑧ 趨勢確認
-        """)
+    # sell checkboxes always shown (sell is separate from buy preset)
+    st.caption("🔴 賣出策略（可額外勾選，不選則只靠止損出場）")
+    col_sa, col_sb = st.columns(2)
+    s1_t2 = col_sa.checkbox("⑪ 頭部跌破 MA20（放量）",  key="t2_s1", help="頭部確認")
+    s2_t2 = col_sa.checkbox("⑫ 布林帶上軌賣出",          key="t2_s2")
+    s3_t2 = col_sa.checkbox("⑬ 上漲縮量警惕頂部",        key="t2_s3")
+    s4_t2 = col_sa.checkbox("⑭ 放量急跌",                key="t2_s4")
+    s5_t2 = col_sb.checkbox("⑮ RSI 超買（> 70）",        key="t2_s5")
+    s6_t2 = col_sb.checkbox("⑯ MACD 死叉",               key="t2_s6")
+    s7_t2 = col_sb.checkbox("⑰ 三日陰線 + 跌破MA20",     key="t2_s7")
+    _t2_sell_custom = (s1_t2,s2_t2,s3_t2,s4_t2,s5_t2,s6_t2,s7_t2)
 
-    st.caption("勾選一個或多個策略（多個條件需同時符合）")
-    col_a, col_b = st.columns(2)
-    b1  = col_a.checkbox("① 突破阻力位 + 成交量放大",      help="收盤 > 前20日最高價，且成交量 > 20日均量 1.5 倍")
-    b2  = col_a.checkbox("② MA5 金叉 MA20",                help="5日均線今日上穿20日均線（趨勢轉強）")
-    b3  = col_a.checkbox("③ 底背離（價創新低 MACD未）",     help="swing low 背離：價格新低但 DIF 未新低，RSI < 40")
-    b4  = col_a.checkbox("④ 底部形態突破（放量站上MA20）",  help="近期均線低位，今日放量站上 MA20，底部確認")
-    b5  = col_a.checkbox("⑤ 布林帶下軌買入（牛市過濾）",    help="收盤跌穿布林下軌。注意：熊市自動停用，避免接刀")
-    b6  = col_b.checkbox("⑥ RSI 超賣（< 30，牛市過濾）",   help="RSI 低於 30。注意：熊市自動停用")
-    b7  = col_b.checkbox("⑦ MACD 金叉（DIF上穿DEA）",      help="DIF 今日上穿 DEA，動能由弱轉強，中線入場訊號")
-    b8  = col_b.checkbox("⑧ 個股趨勢確認（MA20 > MA60）",  help="【推薦常開】確保個股本身在上升趨勢，大幅降低逆勢接刀風險")
-    b9  = col_b.checkbox("⑨ 52週新高突破",                  help="【動能策略】接近或突破52週高點，強者恆強")
-    b10 = col_b.checkbox("⑩ 縮量回調至 MA20",              help="【低風險入場】上升趨勢中回調至MA20附近且成交量萎縮")
+    _t2_buy_sigs, _t2_sell_sigs = get_preset_sigs(_t2_preset, _t2_buy_custom, _t2_sell_custom)
 
     top_n_buy = st.number_input("只顯示評分最高前 N 名（0 = 全部）", value=10, min_value=0, step=5, key="top_n_buy")
 
     if st.button("🟢 開始掃描買點"):
-        if not any([b1, b2, b3, b4, b5, b6, b7, b8, b9, b10]):
-            st.warning("⚠️ 請至少勾選一個策略")
+        if not any(_t2_buy_sigs):
+            st.warning("⚠️ 請至少勾選一個買入策略（或選擇一個組合）")
         else:
             df_hsi_scan = get_stock_data("^HSI", period="3mo")
             hsi_bull = True
@@ -1251,7 +1347,7 @@ with tabs[2]:
                 df_hsi_scan = calculate_indicators(df_hsi_scan)
                 hsi_bull = bool(df_hsi_scan["MA20"].iloc[-1] > df_hsi_scan["MA60"].iloc[-1])
 
-            buy_tuple = (b1,b2,b3,b4,b5,b6,b7,b8,b9,b10)
+            buy_tuple = _t2_buy_sigs
             results, hits_dfs = [], {}
             pbar   = st.progress(0)
             status = st.empty()
@@ -1327,38 +1423,33 @@ with tabs[3]:
     st.subheader("🔴 賣出 / 做空策略掃描")
     cache_banner()
 
-    with st.expander("💡 策略組合建議（點擊展開）", expanded=True):
-        st.markdown("""
-        > 勾選**多個策略**可提高訊號可靠度。以下是針對港股優化的組合：
+    _t3_preset, _t3_custom = preset_selector("tab3")
 
-        | 組合 | 勾選策略 | 適用場景 | 勝率參考 |
-        |------|---------|---------|---------|
-        | 💀 **趨勢反轉確認** | ⑪ 頭部破位 ＋ ⑯ MACD死叉 | 確認下跌趨勢，中線 | ⭐⭐⭐⭐⭐ |
-        | 🔥 **雙重超買出貨** | ⑫ 布林上軌 ＋ ⑮ RSI超買 | 頂部回調，短線 | ⭐⭐⭐⭐ |
-        | 🏗️ **量價背離出逃** | ⑬ 上漲縮量 ＋ ⑯ MACD死叉 | 頂部出貨訊號 | ⭐⭐⭐⭐ |
-        | 🔱 **三連陰確認** | ⑰ 三日陰線 ＋ ⑪ 跌破MA20 | 趨勢破壞最強確認 | ⭐⭐⭐⭐⭐ |
-        | ⚡ **恐慌急跌跟進** | ⑭ 放量急跌 ＋ ⑯ MACD死叉 | 短線動能做空 | ⭐⭐⭐ |
-
-        **⚠️ 注意：**
-        - 港股做空成本高，這些策略更適合用作「離場 / 止盈」訊號，而非做空
-        - ⑮ RSI超買 在強勢牛市中容易假訊號，需配合 ⑪ 趨勢破壞確認
-        """)
-
-    st.caption("勾選一個或多個策略（多個條件需同時符合）")
+    st.caption("🔴 賣出策略（勾選一個或多個，不選則只靠止損出場）")
     col_c, col_d = st.columns(2)
-    s1 = col_c.checkbox("⑪ 頭部形態跌破 MA20（放量）",  help="近期均線高位，今日放量跌破 MA20，頭部確認")
-    s2 = col_c.checkbox("⑫ 布林帶上軌賣出",             help="收盤突破布林帶上軌，均值回歸賣點")
-    s3 = col_c.checkbox("⑬ 上漲縮量（警惕頂部）",       help="價格創10日新高，但成交量萎縮（量能不足，假突破）")
-    s4 = col_c.checkbox("⑭ 放量急跌",                   help="收盤跌幅 > 2%，且成交量 > 20日均量 1.5 倍")
-    s5 = col_d.checkbox("⑮ RSI 超買（> 70）",           help="RSI 高於 70，超買區間")
-    s6 = col_d.checkbox("⑯ MACD 死叉（DIF下穿DEA）",    help="DIF 今日下穿 DEA，動能由強轉弱，中線出場訊號")
-    s7 = col_d.checkbox("⑰ 三日陰線 + 跌破MA20",        help="【最強離場訊號】連續三根陰線且收盤在MA20以下，趨勢破壞確認")
+    s1 = col_c.checkbox("⑪ 頭部形態跌破 MA20（放量）",  key="t3_s1", help="頭部確認")
+    s2 = col_c.checkbox("⑫ 布林帶上軌賣出",              key="t3_s2")
+    s3 = col_c.checkbox("⑬ 上漲縮量（警惕頂部）",        key="t3_s3")
+    s4 = col_c.checkbox("⑭ 放量急跌",                    key="t3_s4")
+    s5 = col_d.checkbox("⑮ RSI 超買（> 70）",            key="t3_s5")
+    s6 = col_d.checkbox("⑯ MACD 死叉（DIF下穿DEA）",     key="t3_s6")
+    s7 = col_d.checkbox("⑰ 三日陰線 + 跌破MA20",         key="t3_s7")
+    _t3_sell_custom = (s1,s2,s3,s4,s5,s6,s7)
+
+    # Tab3 is sell-only scan: buy sigs from preset, sell sigs from checkboxes
+    _t3_buy_sigs, _t3_sell_preset = get_preset_sigs(
+        _t3_preset,
+        (False,)*10,   # buy not used in sell scan
+        _t3_sell_custom
+    )
+    # Use checkbox sell sigs for the scan (user picks explicitly)
+    _t3_scan_sigs = _t3_sell_custom
 
     if st.button("🔴 開始掃描賣點"):
-        if not any([s1, s2, s3, s4, s5, s6, s7]):
-            st.warning("⚠️ 請至少勾選一個策略")
+        if not any(_t3_scan_sigs):
+            st.warning("⚠️ 請至少勾選一個賣出策略")
         else:
-            sell_tuple = (s1, s2, s3, s4, s5, s6, s7)
+            sell_tuple = _t3_scan_sigs
             s_names    = ["s1","s2","s3","s4","s5","s6","s7"]
             results, hits_dfs = [], {}
             pbar   = st.progress(0)
@@ -1529,32 +1620,39 @@ with tabs[5]:
     st.divider()
 
     st.markdown("#### 🟢 買入策略")
-    st.markdown("#### 🟢 買入策略")
-    bc1, bc2 = st.columns(2)
-    bb1  = bc1.checkbox("① 突破阻力位 + 放量",       key="bb1")
-    bb2  = bc1.checkbox("② MA5 金叉 MA20",            key="bb2")
-    bb3  = bc1.checkbox("③ 底背離（MACD未新低）",     key="bb3")
-    bb4  = bc1.checkbox("④ 底部形態突破 MA20",        key="bb4")
-    bb5  = bc1.checkbox("⑤ 布林帶下軌（牛市過濾）",  key="bb5")
-    bb6  = bc2.checkbox("⑥ RSI 超賣（< 30，牛市）",  key="bb6")
-    bb7  = bc2.checkbox("⑦ MACD 金叉",                key="bb7")
-    bb8  = bc2.checkbox("⑧ 個股趨勢確認 MA20>MA60",  key="bb8")
-    bb9  = bc2.checkbox("⑨ 52週新高突破",             key="bb9")
-    bb10 = bc2.checkbox("⑩ 縮量回調至 MA20",         key="bb10")
+    _t5_preset, _t5_custom = preset_selector("tab5")
 
-    st.markdown("#### 🔴 賣出策略")
-    st.caption("⚠️ 若不勾選任何賣出策略，只靠止損 / 止盈 / 最長持倉天數出場")
-    sc1, sc2 = st.columns(2)
-    bs1 = sc1.checkbox("⑪ 頭部跌破 MA20（放量）",  key="bs1")
-    bs2 = sc1.checkbox("⑫ 布林帶上軌賣出",          key="bs2")
-    bs3 = sc1.checkbox("⑬ 上漲縮量警惕頂部",        key="bs3")
-    bs4 = sc1.checkbox("⑭ 放量急跌",                key="bs4")
-    bs5 = sc2.checkbox("⑮ RSI 超買（> 70）",        key="bs5")
-    bs6 = sc2.checkbox("⑯ MACD 死叉",               key="bs6")
-    bs7 = sc2.checkbox("⑰ 三日陰線 + 跌破MA20",     key="bs7")
+    if _t5_custom:
+        st.markdown("#### 🟢 買入策略（自定義）")
+        bc1, bc2 = st.columns(2)
+        bb1  = bc1.checkbox("① 突破阻力位 + 放量",       key="bb1")
+        bb2  = bc1.checkbox("② MA5 金叉 MA20",            key="bb2")
+        bb3  = bc1.checkbox("③ 底背離（MACD未新低）",     key="bb3")
+        bb4  = bc1.checkbox("④ 底部形態突破 MA20",        key="bb4")
+        bb5  = bc1.checkbox("⑤ 布林帶下軌（牛市過濾）",  key="bb5")
+        bb6  = bc2.checkbox("⑥ RSI 超賣（< 30，牛市）",  key="bb6")
+        bb7  = bc2.checkbox("⑦ MACD 金叉",                key="bb7")
+        bb8  = bc2.checkbox("⑧ 個股趨勢確認 MA20>MA60",  key="bb8")
+        bb9  = bc2.checkbox("⑨ 52週新高突破",             key="bb9")
+        bb10 = bc2.checkbox("⑩ 縮量回調至 MA20",         key="bb10")
+        _t5_buy_custom = (bb1,bb2,bb3,bb4,bb5,bb6,bb7,bb8,bb9,bb10)
 
-    buy_sigs  = (bb1,bb2,bb3,bb4,bb5,bb6,bb7,bb8,bb9,bb10)
-    sell_sigs = (bs1,bs2,bs3,bs4,bs5,bs6,bs7)
+        st.markdown("#### 🔴 賣出策略（自定義）")
+        st.caption("⚠️ 若不勾選任何賣出策略，只靠止損 / 止盈 / 最長持倉天數出場")
+        sc1, sc2 = st.columns(2)
+        bs1 = sc1.checkbox("⑪ 頭部跌破 MA20（放量）",  key="bs1")
+        bs2 = sc1.checkbox("⑫ 布林帶上軌賣出",          key="bs2")
+        bs3 = sc1.checkbox("⑬ 上漲縮量警惕頂部",        key="bs3")
+        bs4 = sc1.checkbox("⑭ 放量急跌",                key="bs4")
+        bs5 = sc2.checkbox("⑮ RSI 超買（> 70）",        key="bs5")
+        bs6 = sc2.checkbox("⑯ MACD 死叉",               key="bs6")
+        bs7 = sc2.checkbox("⑰ 三日陰線 + 跌破MA20",     key="bs7")
+        _t5_sell_custom = (bs1,bs2,bs3,bs4,bs5,bs6,bs7)
+    else:
+        _t5_buy_custom  = (False,)*10
+        _t5_sell_custom = (False,)*7
+
+    buy_sigs, sell_sigs = get_preset_sigs(_t5_preset, _t5_buy_custom, _t5_sell_custom)
 
     st.divider()
 
@@ -2288,33 +2386,40 @@ with tabs[6]:
     st.divider()
 
     # ── 策略選擇 ──────────────────────────────────────────────────
-    st.markdown("#### 🟢 買入策略")
-    wf_bc1, wf_bc2 = st.columns(2)
-    wf_bb1  = wf_bc1.checkbox("① 突破阻力位 + 放量",       key="wf_bb1")
-    wf_bb2  = wf_bc1.checkbox("② MA5 金叉 MA20",            key="wf_bb2")
-    wf_bb3  = wf_bc1.checkbox("③ 底背離（MACD未新低）",     key="wf_bb3")
-    wf_bb4  = wf_bc1.checkbox("④ 底部形態突破 MA20",        key="wf_bb4")
-    wf_bb5  = wf_bc1.checkbox("⑤ 布林帶下軌（牛市過濾）",  key="wf_bb5")
-    wf_bb6  = wf_bc2.checkbox("⑥ RSI 超賣（< 30，牛市）",  key="wf_bb6")
-    wf_bb7  = wf_bc2.checkbox("⑦ MACD 金叉",                key="wf_bb7")
-    wf_bb8  = wf_bc2.checkbox("⑧ 個股趨勢確認 MA20>MA60",  key="wf_bb8")
-    wf_bb9  = wf_bc2.checkbox("⑨ 52週新高突破",             key="wf_bb9")
-    wf_bb10 = wf_bc2.checkbox("⑩ 縮量回調至 MA20",         key="wf_bb10")
+    _wf_preset, _wf_custom = preset_selector("wf")
 
-    st.markdown("#### 🔴 賣出策略")
-    st.caption("⚠️ 若不勾選任何賣出策略，只靠止損 / 止盈 / 最長持倉天數出場")
-    wf_sc1, wf_sc2 = st.columns(2)
-    wf_bs1 = wf_sc1.checkbox("⑪ 頭部跌破 MA20（放量）",  key="wf_bs1")
-    wf_bs2 = wf_sc1.checkbox("⑫ 布林帶上軌賣出",          key="wf_bs2")
-    wf_bs3 = wf_sc1.checkbox("⑬ 上漲縮量警惕頂部",        key="wf_bs3")
-    wf_bs4 = wf_sc1.checkbox("⑭ 放量急跌",                key="wf_bs4")
-    wf_bs5 = wf_sc2.checkbox("⑮ RSI 超買（> 70）",        key="wf_bs5")
-    wf_bs6 = wf_sc2.checkbox("⑯ MACD 死叉",               key="wf_bs6")
-    wf_bs7 = wf_sc2.checkbox("⑰ 三日陰線 + 跌破MA20",     key="wf_bs7")
+    if _wf_custom:
+        st.markdown("#### 🟢 買入策略（自定義）")
+        wf_bc1, wf_bc2 = st.columns(2)
+        wf_bb1  = wf_bc1.checkbox("① 突破阻力位 + 放量",       key="wf_bb1")
+        wf_bb2  = wf_bc1.checkbox("② MA5 金叉 MA20",            key="wf_bb2")
+        wf_bb3  = wf_bc1.checkbox("③ 底背離（MACD未新低）",     key="wf_bb3")
+        wf_bb4  = wf_bc1.checkbox("④ 底部形態突破 MA20",        key="wf_bb4")
+        wf_bb5  = wf_bc1.checkbox("⑤ 布林帶下軌（牛市過濾）",  key="wf_bb5")
+        wf_bb6  = wf_bc2.checkbox("⑥ RSI 超賣（< 30，牛市）",  key="wf_bb6")
+        wf_bb7  = wf_bc2.checkbox("⑦ MACD 金叉",                key="wf_bb7")
+        wf_bb8  = wf_bc2.checkbox("⑧ 個股趨勢確認 MA20>MA60",  key="wf_bb8")
+        wf_bb9  = wf_bc2.checkbox("⑨ 52週新高突破",             key="wf_bb9")
+        wf_bb10 = wf_bc2.checkbox("⑩ 縮量回調至 MA20",         key="wf_bb10")
+        _wf_buy_custom = (wf_bb1,wf_bb2,wf_bb3,wf_bb4,wf_bb5,
+                          wf_bb6,wf_bb7,wf_bb8,wf_bb9,wf_bb10)
 
-    wf_buy_sigs  = (wf_bb1,wf_bb2,wf_bb3,wf_bb4,wf_bb5,
-                    wf_bb6,wf_bb7,wf_bb8,wf_bb9,wf_bb10)
-    wf_sell_sigs = (wf_bs1,wf_bs2,wf_bs3,wf_bs4,wf_bs5,wf_bs6,wf_bs7)
+        st.markdown("#### 🔴 賣出策略（自定義）")
+        st.caption("⚠️ 若不勾選任何賣出策略，只靠止損 / 止盈 / 最長持倉天數出場")
+        wf_sc1, wf_sc2 = st.columns(2)
+        wf_bs1 = wf_sc1.checkbox("⑪ 頭部跌破 MA20（放量）",  key="wf_bs1")
+        wf_bs2 = wf_sc1.checkbox("⑫ 布林帶上軌賣出",          key="wf_bs2")
+        wf_bs3 = wf_sc1.checkbox("⑬ 上漲縮量警惕頂部",        key="wf_bs3")
+        wf_bs4 = wf_sc1.checkbox("⑭ 放量急跌",                key="wf_bs4")
+        wf_bs5 = wf_sc2.checkbox("⑮ RSI 超買（> 70）",        key="wf_bs5")
+        wf_bs6 = wf_sc2.checkbox("⑯ MACD 死叉",               key="wf_bs6")
+        wf_bs7 = wf_sc2.checkbox("⑰ 三日陰線 + 跌破MA20",     key="wf_bs7")
+        _wf_sell_custom = (wf_bs1,wf_bs2,wf_bs3,wf_bs4,wf_bs5,wf_bs6,wf_bs7)
+    else:
+        _wf_buy_custom  = (False,)*10
+        _wf_sell_custom = (False,)*7
+
+    wf_buy_sigs, wf_sell_sigs = get_preset_sigs(_wf_preset, _wf_buy_custom, _wf_sell_custom)
 
     st.divider()
 
