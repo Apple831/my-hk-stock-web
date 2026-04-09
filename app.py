@@ -1305,7 +1305,8 @@ with tabs[2]:
     _t2_preset, _t2_custom = preset_selector("tab2")
 
     if _t2_custom:
-        st.caption("勾選一個或多個策略（多個條件需同時符合）")
+        # ── 自定義模式：顯示買入 + 賣出 checkbox ──────────────
+        st.caption("🟢 買入策略（勾選一個或多個，多個條件需同時符合）")
         col_a, col_b = st.columns(2)
         b1  = col_a.checkbox("① 突破阻力位 + 成交量放大",      help="收盤 > 前20日最高價，且成交量 > 20日均量 1.5 倍")
         b2  = col_a.checkbox("② MA5 金叉 MA20",                help="5日均線今日上穿20日均線（趨勢轉強）")
@@ -1317,21 +1318,22 @@ with tabs[2]:
         b8  = col_b.checkbox("⑧ 個股趨勢確認（MA20 > MA60）",  help="【推薦常開】確保個股本身在上升趨勢")
         b9  = col_b.checkbox("⑨ 52週新高突破",                  help="【動能策略】接近或突破52週高點，強者恆強")
         b10 = col_b.checkbox("⑩ 縮量回調至 MA20",              help="【低風險入場】上升趨勢中回調至MA20附近且成交量萎縮")
-        _t2_buy_custom  = (b1,b2,b3,b4,b5,b6,b7,b8,b9,b10)
-    else:
-        _t2_buy_custom = (False,)*10
+        _t2_buy_custom = (b1,b2,b3,b4,b5,b6,b7,b8,b9,b10)
 
-    # sell checkboxes always shown (sell is separate from buy preset)
-    st.caption("🔴 賣出策略（可額外勾選，不選則只靠止損出場）")
-    col_sa, col_sb = st.columns(2)
-    s1_t2 = col_sa.checkbox("⑪ 頭部跌破 MA20（放量）",  key="t2_s1", help="頭部確認")
-    s2_t2 = col_sa.checkbox("⑫ 布林帶上軌賣出",          key="t2_s2")
-    s3_t2 = col_sa.checkbox("⑬ 上漲縮量警惕頂部",        key="t2_s3")
-    s4_t2 = col_sa.checkbox("⑭ 放量急跌",                key="t2_s4")
-    s5_t2 = col_sb.checkbox("⑮ RSI 超買（> 70）",        key="t2_s5")
-    s6_t2 = col_sb.checkbox("⑯ MACD 死叉",               key="t2_s6")
-    s7_t2 = col_sb.checkbox("⑰ 三日陰線 + 跌破MA20",     key="t2_s7")
-    _t2_sell_custom = (s1_t2,s2_t2,s3_t2,s4_t2,s5_t2,s6_t2,s7_t2)
+        st.caption("🔴 賣出策略（可額外勾選，不選則只靠止損出場）")
+        col_sa, col_sb = st.columns(2)
+        s1_t2 = col_sa.checkbox("⑪ 頭部跌破 MA20（放量）",  key="t2_s1", help="頭部確認")
+        s2_t2 = col_sa.checkbox("⑫ 布林帶上軌賣出",          key="t2_s2")
+        s3_t2 = col_sa.checkbox("⑬ 上漲縮量警惕頂部",        key="t2_s3")
+        s4_t2 = col_sa.checkbox("⑭ 放量急跌",                key="t2_s4")
+        s5_t2 = col_sb.checkbox("⑮ RSI 超買（> 70）",        key="t2_s5")
+        s6_t2 = col_sb.checkbox("⑯ MACD 死叉",               key="t2_s6")
+        s7_t2 = col_sb.checkbox("⑰ 三日陰線 + 跌破MA20",     key="t2_s7")
+        _t2_sell_custom = (s1_t2,s2_t2,s3_t2,s4_t2,s5_t2,s6_t2,s7_t2)
+    else:
+        # ── 預設組合模式：直接從 preset 取值，不顯示 checkbox ─
+        _t2_buy_custom  = (False,)*10
+        _t2_sell_custom = (False,)*7
 
     _t2_buy_sigs, _t2_sell_sigs = get_preset_sigs(_t2_preset, _t2_buy_custom, _t2_sell_custom)
 
@@ -1432,25 +1434,28 @@ with tabs[3]:
 
     _t3_preset, _t3_custom = preset_selector("tab3")
 
-    st.caption("🔴 賣出策略（勾選一個或多個，不選則只靠止損出場）")
-    col_c, col_d = st.columns(2)
-    s1 = col_c.checkbox("⑪ 頭部形態跌破 MA20（放量）",  key="t3_s1", help="頭部確認")
-    s2 = col_c.checkbox("⑫ 布林帶上軌賣出",              key="t3_s2")
-    s3 = col_c.checkbox("⑬ 上漲縮量（警惕頂部）",        key="t3_s3")
-    s4 = col_c.checkbox("⑭ 放量急跌",                    key="t3_s4")
-    s5 = col_d.checkbox("⑮ RSI 超買（> 70）",            key="t3_s5")
-    s6 = col_d.checkbox("⑯ MACD 死叉（DIF下穿DEA）",     key="t3_s6")
-    s7 = col_d.checkbox("⑰ 三日陰線 + 跌破MA20",         key="t3_s7")
-    _t3_sell_custom = (s1,s2,s3,s4,s5,s6,s7)
+    if _t3_custom:
+        # ── 自定義模式：顯示賣出 checkbox ─────────────────────
+        st.caption("🔴 賣出策略（勾選一個或多個，不選則只靠止損出場）")
+        col_c, col_d = st.columns(2)
+        s1 = col_c.checkbox("⑪ 頭部形態跌破 MA20（放量）",  key="t3_s1", help="頭部確認")
+        s2 = col_c.checkbox("⑫ 布林帶上軌賣出",              key="t3_s2")
+        s3 = col_c.checkbox("⑬ 上漲縮量（警惕頂部）",        key="t3_s3")
+        s4 = col_c.checkbox("⑭ 放量急跌",                    key="t3_s4")
+        s5 = col_d.checkbox("⑮ RSI 超買（> 70）",            key="t3_s5")
+        s6 = col_d.checkbox("⑯ MACD 死叉（DIF下穿DEA）",     key="t3_s6")
+        s7 = col_d.checkbox("⑰ 三日陰線 + 跌破MA20",         key="t3_s7")
+        _t3_sell_custom = (s1,s2,s3,s4,s5,s6,s7)
+    else:
+        # ── 預設組合模式：直接從 preset 取值，不顯示 checkbox ─
+        _t3_sell_custom = (False,)*7
 
-    # Tab3 is sell-only scan: buy sigs from preset, sell sigs from checkboxes
-    _t3_buy_sigs, _t3_sell_preset = get_preset_sigs(
+    # 取得實際要用的訊號（preset 模式用 preset sell tuple，自定義用 checkbox）
+    _, _t3_scan_sigs = get_preset_sigs(
         _t3_preset,
-        (False,)*10,   # buy not used in sell scan
-        _t3_sell_custom
+        (False,)*10,
+        _t3_sell_custom,
     )
-    # Use checkbox sell sigs for the scan (user picks explicitly)
-    _t3_scan_sigs = _t3_sell_custom
 
     if st.button("🔴 開始掃描賣點"):
         if not any(_t3_scan_sigs):
