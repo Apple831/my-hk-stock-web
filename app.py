@@ -7,7 +7,7 @@ from datetime import datetime
 import requests
 import os
 
-st.set_page_config(page_title="港股狙擊手 V10.8", layout="wide")
+st.set_page_config(page_title="港股狙擊手 V10.9", layout="wide")
 
 # ══════════════════════════════════════════════════════════════════
 # 命名策略組合（Presets）
@@ -1238,8 +1238,8 @@ with st.sidebar:
 # ③ 主 UI
 # ══════════════════════════════════════════════════════════════════
 STOCKS = load_stocks()
-st.title("🏹 港股狙擊手 V10.8")
-tabs = st.tabs(["🌍 指數", "🏆 跑贏大市", "🟢 買入掃描", "🔴 賣出掃描", "🔍 分析", "📊 回測", "🔬 Walk-Forward"])
+st.title("🏹 港股狙擊手 V10.9")
+tabs = st.tabs(["🌍 指數", "🏆 跑贏大市", "🟢 買入掃描", "🔴 賣出掃描", "🔍 分析", "📊 回測", "🔬 Walk-Forward", "📡 訊號診斷"])
 
 # ── TAB 0：指數 ───────────────────────────────────────────────────
 with tabs[0]:
@@ -1645,7 +1645,7 @@ with tabs[4]:
 
 # ── TAB 5：回測 ───────────────────────────────────────────────────
 with tabs[5]:
-    st.subheader("📊 策略回測系統 V10.8")
+    st.subheader("📊 策略回測系統 V10.9")
 
     bt_mode = st.radio(
         "回測模式",
@@ -2569,4 +2569,417 @@ with tabs[6]:
         **Fold 數建議**：
         - 至少 4 個 Fold 才有統計意義
         - 建議：5y 總數據 + IS=12月 + OOS=3月 → 約 16 個 Fold
+        """)
+
+
+# ══════════════════════════════════════════════════════════════════
+# TAB 7：訊號頻率診斷
+# ──────────────────────────────────────────────────────────────────
+# 目的：掃描全市場，統計每隻股票在指定策略下的歷史訊號數量，
+#       找出「訊號最多」的股票 → 這些股票最適合用於 Walk-Forward。
+#
+# 核心指標：
+#   每月平均訊號數 = 交易次數 / 回測月數
+#   Walk-Forward 最低要求：每月 ≥ 0.8 次（即 IS 12月內 ≥ 10 次）
+# ══════════════════════════════════════════════════════════════════
+
+with tabs[7]:
+    st.subheader("📡 訊號頻率診斷")
+
+    st.markdown("""
+    > **用途**：掃描全市場，找出哪些股票對指定策略最「敏感」（訊號最多）。
+    > 訊號多的股票才適合做 Walk-Forward 驗證，因為每個 OOS 窗口需要足夠的交易次數。
+    >
+    > **Walk-Forward 門檻**：每月平均訊號 ≥ **0.8 次**（IS 12個月 ≥ 10 次）
+    """)
+
+    st.divider()
+
+    # ── 策略選擇 ──────────────────────────────────────────────────
+    st.markdown("#### 選擇要診斷的策略組合")
+    diag_col1, diag_col2 = st.columns([2, 1])
+
+    with diag_col1:
+        diag_preset_name = st.selectbox(
+            "⚡ 選擇預設組合",
+            PRESET_NAMES,
+            key="diag_preset",
+            help="選擇你想測試的策略，系統會統計每隻股票觸發了多少次",
+        )
+
+    with diag_col2:
+        diag_period = st.selectbox(
+            "診斷週期", ["1y", "2y", "3y"], index=1, key="diag_period"
+        )
+
+    # 如果選自定義，顯示 checkbox
+    if diag_preset_name == PRESET_CUSTOM:
+        st.caption("🟢 買入策略")
+        dc1, dc2 = st.columns(2)
+        dbb1  = dc1.checkbox("① 突破放量",        key="diag_bb1")
+        dbb2  = dc1.checkbox("② MA5金叉",          key="diag_bb2")
+        dbb3  = dc1.checkbox("③ 底背離",           key="diag_bb3")
+        dbb4  = dc1.checkbox("④ 底部突破MA20",     key="diag_bb4")
+        dbb5  = dc1.checkbox("⑤ 布林下軌",         key="diag_bb5")
+        dbb6  = dc2.checkbox("⑥ RSI超賣",          key="diag_bb6")
+        dbb7  = dc2.checkbox("⑦ MACD金叉",         key="diag_bb7")
+        dbb8  = dc2.checkbox("⑧ 趨勢確認",         key="diag_bb8")
+        dbb9  = dc2.checkbox("⑨ 52週新高",         key="diag_bb9")
+        dbb10 = dc2.checkbox("⑩ 縮量回調",         key="diag_bb10")
+        diag_buy_sigs  = (dbb1,dbb2,dbb3,dbb4,dbb5,dbb6,dbb7,dbb8,dbb9,dbb10)
+
+        st.caption("🔴 賣出策略")
+        ds1, ds2 = st.columns(2)
+        dbs1 = ds1.checkbox("⑪ 頭部跌破MA20", key="diag_bs1")
+        dbs2 = ds1.checkbox("⑫ 布林上軌",     key="diag_bs2")
+        dbs3 = ds1.checkbox("⑬ 上漲縮量",     key="diag_bs3")
+        dbs4 = ds1.checkbox("⑭ 放量急跌",     key="diag_bs4")
+        dbs5 = ds2.checkbox("⑮ RSI超買",      key="diag_bs5")
+        dbs6 = ds2.checkbox("⑯ MACD死叉",     key="diag_bs6")
+        dbs7 = ds2.checkbox("⑰ 三日陰線",     key="diag_bs7")
+        diag_sell_sigs = (dbs1,dbs2,dbs3,dbs4,dbs5,dbs6,dbs7)
+    else:
+        diag_buy_sigs, diag_sell_sigs = get_preset_sigs(
+            diag_preset_name, (False,)*10, (False,)*7
+        )
+
+    # ── 篩選參數 ──────────────────────────────────────────────────
+    with st.expander("⚙️ 篩選參數", expanded=True):
+        fc1, fc2, fc3 = st.columns(3)
+        min_trades_wf = fc1.number_input(
+            "Walk-Forward 最低交易次數",
+            min_value=1, value=10, step=1, key="diag_min_wf",
+            help="建議 10（IS 12月內至少 10 次）"
+        )
+        min_trades_show = fc2.number_input(
+            "表格顯示最低交易次數",
+            min_value=1, value=3, step=1, key="diag_min_show",
+            help="過濾掉幾乎沒訊號的股票"
+        )
+        top_n_diag = fc3.number_input(
+            "顯示前 N 名",
+            min_value=5, value=30, step=5, key="diag_top_n",
+            help="只顯示訊號最多的前 N 隻"
+        )
+
+    cache_banner()
+
+    if st.button("📡 開始訊號頻率診斷", type="primary", key="run_diag"):
+        if not any(diag_buy_sigs):
+            st.warning("⚠️ 請至少選擇一個買入策略")
+        else:
+            # ── 計算回測月數 ─────────────────────────────────────
+            period_months = {"1y": 12, "2y": 24, "3y": 36}[diag_period]
+
+            cache      = st.session_state.get("stock_cache", {})
+            need_dl    = [s for s in STOCKS if s not in cache]
+            if need_dl:
+                with st.spinner(f"下載 {len(need_dl)} 隻未緩存股票..."):
+                    extra = batch_download(need_dl, period=diag_period)
+                    cache.update(extra)
+                    st.session_state["stock_cache"] = cache
+
+            # ── 逐股統計訊號數 ───────────────────────────────────
+            diag_results = []
+            pbar   = st.progress(0, text="診斷中...")
+            status = st.empty()
+
+            b_names = ["b1","b2","b3","b4","b5","b6","b7","b8","b9","b10"]
+            s_names = ["s1","s2","s3","s4","s5","s6","s7"]
+
+            for idx, ticker in enumerate(STOCKS):
+                pbar.progress((idx + 1) / len(STOCKS),
+                              text=f"診斷 {ticker}  ({idx+1}/{len(STOCKS)})")
+                status.text(f"⏳ {ticker}")
+
+                df_s = cache.get(ticker)
+                if df_s is None or df_s.empty or len(df_s) < 62:
+                    continue
+
+                try:
+                    pre = precompute_signals(df_s)
+
+                    # 買入訊號序列（OR 加總各條，統計「任一買入觸發」的天數）
+                    buy_active = [b_names[k] for k, v in enumerate(diag_buy_sigs) if v]
+                    if not buy_active:
+                        continue
+
+                    # 統計每個買入條件各自的觸發次數
+                    per_sig_counts = {}
+                    for bk in buy_active:
+                        per_sig_counts[bk] = int(pre[bk].sum())
+
+                    # 組合訊號（AND）觸發次數
+                    combined = pre[buy_active[0]].copy()
+                    for bk in buy_active[1:]:
+                        combined = combined & pre[bk]
+                    combined_count = int(combined.sum())
+
+                    # 賣出 OR 訊號觸發次數
+                    sell_active = [s_names[k] for k, v in enumerate(diag_sell_sigs) if v]
+                    sell_count = 0
+                    if sell_active:
+                        sell_combined = pre[sell_active[0]].copy()
+                        for sk in sell_active[1:]:
+                            sell_combined = sell_combined | pre[sk]
+                        sell_count = int(sell_combined.sum())
+
+                    if combined_count < min_trades_show:
+                        continue
+
+                    # 每月平均
+                    avg_per_month = round(combined_count / period_months, 2)
+                    wf_ok = avg_per_month >= (min_trades_wf / period_months * (period_months/12))
+
+                    # 最近一次買入訊號距今天數
+                    last_signal_days = None
+                    if combined.any():
+                        last_idx = combined[combined].index[-1]
+                        last_signal_days = (df_s.index[-1] - last_idx).days
+
+                    diag_results.append({
+                        "代碼":          ticker,
+                        "組合訊號數":    combined_count,
+                        "每月平均":      avg_per_month,
+                        "WF適合度":      "✅ 適合" if wf_ok else "⚠️ 不足",
+                        "賣出訊號數":    sell_count,
+                        "距上次訊號(日)": last_signal_days if last_signal_days is not None else 999,
+                        "數據長度(日)":  len(df_s),
+                        # individual signal counts for breakdown
+                        **{f"[{bk}]": per_sig_counts.get(bk, 0) for bk in buy_active},
+                    })
+                except Exception:
+                    continue
+
+            pbar.empty()
+            status.empty()
+
+            if not diag_results:
+                st.warning("⚠️ 沒有股票達到最低訊號次數。請：\n"
+                           "- 降低「表格顯示最低交易次數」\n"
+                           "- 選擇更寬鬆的策略（單一條件）\n"
+                           "- 拉長診斷週期")
+            else:
+                # ── 排序：組合訊號數由高到低 ─────────────────────
+                diag_results.sort(key=lambda x: x["組合訊號數"], reverse=True)
+                if top_n_diag > 0:
+                    diag_results = diag_results[:int(top_n_diag)]
+
+                wf_count   = sum(1 for r in diag_results if "✅" in r["WF適合度"])
+                total_diag = len(diag_results)
+
+                # ── 彙總橫幅 ─────────────────────────────────────
+                st.markdown(
+                    f"<div style='background:rgba(255,255,255,0.05);"
+                    f"border-left:4px solid #f9a825;"
+                    f"padding:10px 16px;border-radius:6px;margin-bottom:12px'>"
+                    f"<b>📡 診斷完成</b>　｜　"
+                    f"有訊號股票：<b>{total_diag}</b> 隻　｜　"
+                    f"✅ 適合 Walk-Forward：<b>{wf_count}</b> 隻　｜　"
+                    f"⚠️ 訊號不足：<b>{total_diag - wf_count}</b> 隻"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+                # ── 核心結果表 ───────────────────────────────────
+                display_cols = ["代碼", "組合訊號數", "每月平均", "WF適合度",
+                                "賣出訊號數", "距上次訊號(日)", "數據長度(日)"]
+                # add individual signal breakdown columns
+                breakdown_cols = [c for c in diag_results[0].keys()
+                                  if c.startswith("[")]
+                all_cols = display_cols + breakdown_cols
+
+                df_diag = pd.DataFrame(diag_results)[all_cols]
+
+                def _color_wf(val):
+                    if "✅" in str(val): return "color:#26a69a;font-weight:bold"
+                    if "⚠️" in str(val): return "color:#f9a825"
+                    return ""
+
+                def _color_count(val):
+                    try:
+                        v = float(val)
+                        if v >= min_trades_wf:      return "color:#26a69a;font-weight:bold"
+                        if v >= min_trades_wf * 0.5: return "color:#f9a825"
+                        return "color:#ef5350"
+                    except Exception:
+                        return ""
+
+                def _color_days(val):
+                    try:
+                        v = int(val)
+                        if v <= 10:  return "color:#26a69a;font-weight:bold"
+                        if v <= 30:  return "color:#f9a825"
+                        return "color:#888"
+                    except Exception:
+                        return ""
+
+                st.dataframe(
+                    df_diag.style
+                        .map(_color_wf,    subset=["WF適合度"])
+                        .map(_color_count, subset=["組合訊號數"])
+                        .map(_color_days,  subset=["距上次訊號(日)"])
+                        .format({"每月平均": "{:.2f}"}),
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(600, 36 * len(df_diag) + 40),
+                )
+
+                # ── 視覺化：每月平均訊號長條圖 ───────────────────
+                st.divider()
+                st.markdown("### 📊 每月平均訊號數分布")
+
+                top20 = df_diag.head(20)
+                bar_colors = [
+                    "#26a69a" if r >= (min_trades_wf / period_months * (period_months/12))
+                    else "#f9a825"
+                    for r in top20["每月平均"]
+                ]
+                fig_diag = go.Figure(go.Bar(
+                    x=top20["代碼"],
+                    y=top20["每月平均"],
+                    marker_color=bar_colors,
+                    text=[f"{v:.2f}" for v in top20["每月平均"]],
+                    textposition="outside",
+                ))
+                threshold = min_trades_wf / period_months * (period_months/12)
+                fig_diag.add_hline(
+                    y=threshold,
+                    line_dash="dot", line_color="#26a69a",
+                    annotation_text=f"WF門檻 {threshold:.2f}/月",
+                    annotation_position="right",
+                )
+                fig_diag.update_layout(
+                    height=380,
+                    margin=dict(t=20, b=10),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    yaxis_title="每月平均訊號數",
+                    xaxis_tickangle=-45,
+                )
+                st.plotly_chart(fig_diag, use_container_width=True)
+
+                # ── WF 推薦清單 ──────────────────────────────────
+                wf_ready = df_diag[df_diag["WF適合度"].str.contains("✅")]
+                if not wf_ready.empty:
+                    st.divider()
+                    st.markdown("### 🎯 推薦用於 Walk-Forward 的股票")
+                    st.caption(f"以下 {len(wf_ready)} 隻股票每月訊號 ≥ {threshold:.2f}，"
+                               f"建議優先在 Walk-Forward Tab 驗證這些股票")
+
+                    wf_tickers = wf_ready["代碼"].tolist()
+                    cols_per_row = 6
+                    for row_start in range(0, len(wf_tickers), cols_per_row):
+                        chunk = wf_tickers[row_start: row_start + cols_per_row]
+                        cols  = st.columns(cols_per_row)
+                        for col, tk in zip(cols, chunk):
+                            r = wf_ready[wf_ready["代碼"] == tk].iloc[0]
+                            col.metric(
+                                label=tk,
+                                value=f"{r['每月平均']:.2f}/月",
+                                delta=f"{int(r['組合訊號數'])}次/{diag_period}",
+                            )
+
+                    st.info(
+                        "💡 **下一步**：複製以上代碼，去「🔬 Walk-Forward」Tab 逐一驗證。"
+                        "建議設定：IS=12月、OOS=3月、總週期=5y。",
+                        icon="🔬",
+                    )
+
+                    # ── 個股訊號分布熱力圖（按月統計）────────────
+                    st.divider()
+                    st.markdown("### 🗓️ 訊號時間分布（前5隻）")
+                    st.caption("觀察訊號是否均勻分布於各月，還是集中在特定時期（後者代表策略依賴特定市場環境）")
+
+                    for tk in wf_tickers[:5]:
+                        df_tk = cache.get(tk)
+                        if df_tk is None or df_tk.empty:
+                            continue
+                        try:
+                            pre_tk = precompute_signals(df_tk)
+                            buy_active_tk = [b_names[k] for k, v in enumerate(diag_buy_sigs) if v]
+                            if not buy_active_tk:
+                                continue
+                            sig_tk = pre_tk[buy_active_tk[0]].copy()
+                            for bk in buy_active_tk[1:]:
+                                sig_tk = sig_tk & pre_tk[bk]
+
+                            # 按月統計訊號數
+                            sig_monthly = sig_tk.resample("ME").sum()
+                            if sig_monthly.empty:
+                                continue
+
+                            years  = sorted(sig_monthly.index.year.unique())
+                            months = list(range(1, 13))
+                            month_labels = ["Jan","Feb","Mar","Apr","May","Jun",
+                                            "Jul","Aug","Sep","Oct","Nov","Dec"]
+
+                            z, text_z = [], []
+                            for yr in years:
+                                row, trow = [], []
+                                for m in months:
+                                    mask = (sig_monthly.index.year == yr) & \
+                                           (sig_monthly.index.month == m)
+                                    v = int(sig_monthly[mask].iloc[0]) if mask.any() else 0
+                                    row.append(v)
+                                    trow.append(str(v) if v > 0 else "")
+                                z.append(row)
+                                text_z.append(trow)
+
+                            fig_heat = go.Figure(go.Heatmap(
+                                z=z,
+                                x=month_labels,
+                                y=[str(yr) for yr in years],
+                                text=text_z,
+                                texttemplate="%{text}",
+                                textfont=dict(size=11),
+                                colorscale=[
+                                    [0.0, "#1e1e2e"],
+                                    [0.4, "#f9a825"],
+                                    [1.0, "#26a69a"],
+                                ],
+                                showscale=False,
+                            ))
+                            fig_heat.update_layout(
+                                title=dict(text=f"{tk} 訊號月分布", font=dict(size=13)),
+                                height=max(120, len(years) * 40 + 60),
+                                margin=dict(t=35, b=5, l=50, r=10),
+                                paper_bgcolor="rgba(0,0,0,0)",
+                                plot_bgcolor="rgba(0,0,0,0)",
+                                xaxis=dict(side="top"),
+                            )
+                            st.plotly_chart(fig_heat, use_container_width=True)
+                        except Exception:
+                            continue
+                else:
+                    st.info("目前沒有股票達到 Walk-Forward 門檻，建議：\n"
+                            "- 選擇單一條件策略（如只選⑦ MACD金叉）\n"
+                            "- 拉長診斷週期至 3y\n"
+                            "- 降低 Walk-Forward 最低交易次數")
+
+    # ── 使用說明 ──────────────────────────────────────────────────
+    with st.expander("📖 如何使用訊號頻率診斷？"):
+        st.markdown("""
+        **第一步：選單一條件策略**
+        先選「✏️ 自定義」，只勾一個條件（建議先試「⑦ MACD金叉」），
+        找出哪些股票對這個指標最敏感。
+
+        **第二步：逐步加條件**
+        找到訊號多的股票後，逐步加買入條件，觀察訊號數如何下降。
+        當訊號數降到 Walk-Forward 門檻以下，就是條件組合太嚴格的警告。
+
+        **第三步：看時間分布熱力圖**
+        - 訊號均勻分佈在各月 → 策略穩健，不依賴特定市場環境
+        - 訊號集中在某幾個月 → 策略可能只在特定行情有效（過擬合風險）
+
+        **第四步：去 Walk-Forward Tab 驗證**
+        複製「推薦清單」中的股票代碼，用 IS=12月、OOS=3月、5y 總週期驗證。
+
+        **每月平均訊號數參考：**
+        | 數值 | 評估 |
+        |------|------|
+        | ≥ 1.5/月 | 🟢 非常適合 WF，訊號充足 |
+        | 0.8-1.5/月 | 🟡 適合，但邊緣，建議用 5y 數據 |
+        | 0.3-0.8/月 | ⚠️ 勉強，需要 10y 數據才有意義 |
+        | < 0.3/月 | 🔴 不適合，策略對此股票太嚴格 |
         """)
