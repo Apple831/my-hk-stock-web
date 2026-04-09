@@ -1988,39 +1988,37 @@ def run_walk_forward(
     max_hold_days: int = None,
 ) -> list:
     """
-    滾動 Walk-Forward 驗證。
+    滾動 Walk-Forward 驗證（修復版）。
+
+    OOS 計算策略：
+      用 warmup(61列) + OOS 合併計算指標，run_backtest 跑全段，
+      然後只保留「買入日期 >= OOS 開始日」的交易，
+      完全避免訊號 index 對齊問題。
 
     每次滾動：
-      IS 窗口  = is_months 個月
-      OOS 窗口 = oos_months 個月（緊接在 IS 之後）
-      步長     = oos_months 個月（OOS 長度）
-
-    回傳每個 fold 的結果 list，每項包含：
-      fold, is_start, is_end, oos_start, oos_end,
-      is_metrics, oos_metrics, is_trades, oos_trades,
-      is_equity, oos_equity
+      IS 窗口  = is_months 個月（約 21 交易日/月）
+      OOS 窗口 = oos_months 個月
+      步長     = oos_months 個月（非重疊 OOS）
     """
     if df.empty or len(df) < 60:
         return []
 
-    results = []
+    results    = []
     total_days = len(df)
-    is_days  = int(is_months  * 21)   # 約每月 21 個交易日
-    oos_days = int(oos_months * 21)
-    step     = oos_days                # 步長 = OOS 長度（非重疊 OOS）
-
-    fold = 1
-    start = 0
+    is_days    = int(is_months  * 21)
+    oos_days   = int(oos_months * 21)
+    step       = oos_days
+    fold       = 1
+    start      = 0
 
     while start + is_days + oos_days <= total_days:
         is_df  = df.iloc[start : start + is_days].copy()
         oos_df = df.iloc[start + is_days : start + is_days + oos_days].copy()
 
-        # 兩段都需要至少 62 行（指標預熱）
         if len(is_df) < 62 or len(oos_df) < 10:
             break
 
-        # IS 回測
+        # ── IS 回測 ───────────────────────────────────────────────
         pre_is = precompute_signals(is_df)
         is_trades, is_equity, _ = run_backtest(
             is_df, buy_sigs, sell_sigs,
@@ -2032,37 +2030,62 @@ def run_walk_forward(
         )
         is_metrics = calc_bt_metrics(is_trades, is_equity, trade_size)
 
-        # OOS 回測
-        # 注意：OOS 數據本身仍需 precompute（它有自己的 index）
-        # 但要把 IS 最後 61 行接上去，保證指標不斷層
-        warmup    = df.iloc[max(0, start + is_days - 61) : start + is_days]
-        oos_full  = pd.concat([warmup, oos_df])
-        pre_oos   = precompute_signals(oos_full)
-        # 只取 OOS 部分的訊號（去掉 warmup）
-        oos_idx   = oos_full.index.get_loc(oos_df.index[0]) if oos_df.index[0] in oos_full.index else len(warmup)
-        pre_oos_trimmed = {k: v.iloc[oos_idx:].reset_index(drop=False)
-                           for k, v in pre_oos.items()}
-        # 重新對齊 index
-        pre_oos_aligned = {k: v.set_index('index')[k] if 'index' in v.columns
-                            else pd.Series(v.values, index=oos_df.index)
-                            for k, v in pre_oos_trimmed.items()}
+        # ── OOS 回測（乾淨方案）──────────────────────────────────
+        # 1. 用 warmup + OOS 合併計算指標，確保 MA60 等不斷層
+        warmup_start = max(0, start + is_days - 61)
+        oos_full     = df.iloc[warmup_start : start + is_days + oos_days].copy()
+        oos_full     = calculate_indicators(oos_full)   # 重新算指標
 
-        oos_trades, oos_equity, _ = run_backtest(
-            oos_df, buy_sigs, sell_sigs,
+        # 2. run_backtest 跑全段（warmup 部分的交易會被 mask 過濾）
+        oos_trades_all, _, _ = run_backtest(
+            oos_full, buy_sigs, sell_sigs,
             trade_size=trade_size, commission=commission,
             stop_loss_pct=stop_loss_pct,
             take_profit_pct=take_profit_pct,
             max_hold_days=max_hold_days,
-            _precomputed=pre_oos_aligned,
+            _precomputed=None,   # 不傳 precomputed，讓它自己算
         )
+
+        # 3. 只保留「買入日期 >= OOS 開始日」的交易
+        oos_start_date = oos_df.index[0]
+        oos_trades = [
+            t for t in oos_trades_all
+            if t["_buy_date"] >= oos_start_date
+        ]
+
+        # 4. 從篩選後的交易重建 equity 曲線
+        if oos_trades:
+            # 按賣出日期排序，逐日累計回報
+            cum = 0.0
+            sell_map: dict = {}
+            for t in oos_trades:
+                sd = t["賣出日期"].replace("（持倉中）", "")
+                sell_map.setdefault(sd, []).append(t["回報%"])
+
+            eq_rows = []
+            for date in oos_df.index:
+                d_str = date.strftime("%Y-%m-%d")
+                if d_str in sell_map:
+                    for r in sell_map[d_str]:
+                        cum += r
+                eq_rows.append({"date": date,
+                                 "equity": trade_size * (1 + cum / 100)})
+            oos_equity = pd.DataFrame(eq_rows).set_index("date")
+        else:
+            # 無交易：持平曲線
+            oos_equity = pd.DataFrame(
+                {"equity": [trade_size] * len(oos_df)},
+                index=oos_df.index,
+            )
+
         oos_metrics = calc_bt_metrics(oos_trades, oos_equity, trade_size)
 
         results.append({
-            "fold":       fold,
-            "is_start":   is_df.index[0],
-            "is_end":     is_df.index[-1],
-            "oos_start":  oos_df.index[0],
-            "oos_end":    oos_df.index[-1],
+            "fold":        fold,
+            "is_start":    is_df.index[0],
+            "is_end":      is_df.index[-1],
+            "oos_start":   oos_df.index[0],
+            "oos_end":     oos_df.index[-1],
             "is_metrics":  is_metrics  or {},
             "oos_metrics": oos_metrics or {},
             "is_trades":   is_trades,
