@@ -7,7 +7,7 @@ from datetime import datetime
 import requests
 import os
 
-st.set_page_config(page_title="港股狙擊手 V10.9", layout="wide")
+st.set_page_config(page_title="港股狙擊手 V11.0", layout="wide")
 
 # ══════════════════════════════════════════════════════════════════
 # 命名策略組合（Presets）
@@ -356,7 +356,7 @@ def cache_banner():
 # 原版 result 變數被 OR 邏輯污染後完全沒被用到，
 # 現改為純粹比較左右 window 根，邏輯清晰正確。
 # ══════════════════════════════════════════════════════════════════
-def _swing_lows(close_ser: pd.Series, window: int = 5) -> pd.Series:
+def _swing_lows(close_ser: pd.Series, window: int = 10) -> pd.Series:
     """
     向量化識別 swing low（無前視偏差版）：
     當前收盤 = 過去 (window+1) 根中的最小值（含當前，不含未來）。
@@ -484,8 +484,12 @@ def _compute_b3_series(df: pd.DataFrame) -> pd.Series:
     prev_sl_close = df["Close"].where(swing_lo).ffill().shift(1)
     prev_sl_dif   = df["DIF"].where(swing_lo).ffill().shift(1)
 
+    # V11.0：兩個 swing low 之間至少跌 3%，過濾噪音背離
+    min_price_diff = (prev_sl_close - df["Close"]) / prev_sl_close > 0.03
+
     b3 = (
         swing_lo &
+        min_price_diff &
         (df["Close"] < prev_sl_close) &
         (df["DIF"]   > prev_sl_dif)   &
         (df["RSI"]   < 40)
@@ -539,7 +543,8 @@ def precompute_signals(df: pd.DataFrame,
     # 動能因子：收盤接近或突破過去252日收盤最高點，強者恆強
     # 統一用 Close（避免 High 盤中極值造成的邏輯不一致）
     close_52w_high = df["Close"].rolling(min(252, len(df)), min_periods=60).max().shift(1)
-    b9 = c["Close"] >= close_52w_high * 0.98
+    # V11.0: 真突破，移除 0.98 門檻
+    b9 = c["Close"] >= close_52w_high
 
     # b10 縮量回調至 MA20（NEW）
     # 上升趨勢中的低風險加倉點：個股向上，回調到 MA20 附近，成交量萎縮（無恐慌拋售）
@@ -605,7 +610,7 @@ def run_backtest(
     df: pd.DataFrame,
     buy_sigs: tuple, sell_sigs: tuple,
     trade_size: float = 100_000,
-    commission: float = 0.002,
+    slippage: float = 0.002,
     stop_loss_pct: float = None,
     take_profit_pct: float = None,
     max_hold_days: int = None,
@@ -637,6 +642,8 @@ def run_backtest(
     buy_arr   = buy_signal.values
     sell_arr  = sell_signal.values
     close_arr = df["Close"].values.astype(float)
+    low_arr   = df["Low"].values.astype(float)      # V11.0: 用於止損判斷
+    high_arr  = df["High"].values.astype(float)      # V11.0: 用於止盈判斷
     idx_arr   = df.index
     n         = len(df)
 
@@ -649,25 +656,24 @@ def run_backtest(
     daily_cum   = []   # list of (date, cum_ret_pct_after_that_day)
 
     for i in range(61, n):
-        close = close_arr[i]
-        date  = idx_arr[i]
-
-        # 先記錄今日的已實現累計（賣出平倉後才更新，所以先記昨日值）
-        # → 我們在迴圈末尾記錄，這樣當日賣出的利潤會反映在當日
+        close  = close_arr[i]
+        low_i  = low_arr[i]       # V11.0: 用於止損
+        high_i = high_arr[i]      # V11.0: 用於止盈
+        date   = idx_arr[i]
 
         # 買入（跳過最後一天：避免 entry=last_close → 強制平倉也=last_close → 0%幽靈交易）
         if buy_arr[i] and i + 1 < n - 1:
-            entry_px   = close_arr[i + 1]
+            entry_px   = close_arr[i + 1] * (1 + slippage)   # V11.0: 滑點買高
             entry_date = idx_arr[i + 1]
             entry_idx  = i + 1
-            shares = int(trade_size / (entry_px * (1 + commission)))
+            shares = int(trade_size / entry_px)
             if shares > 0:
                 positions.append({
                     "shares":     shares,
                     "entry_px":   entry_px,
                     "entry_date": entry_date,
                     "entry_idx":  entry_idx,
-                    "cost":       shares * entry_px * (1 + commission),
+                    "cost":       shares * entry_px,
                 })
 
         # 賣出
@@ -676,18 +682,26 @@ def run_backtest(
             days_held = i - pos["entry_idx"]
             ep        = pos["entry_px"]
             reason    = None
-            if stop_loss_pct   and close <= ep * (1 - stop_loss_pct / 100):
+            exit_px   = close  # 預設用收盤價
+
+            # V11.0: 止損用 Low 判斷（模擬盤中止損單）
+            if stop_loss_pct and low_i <= ep * (1 - stop_loss_pct / 100):
+                exit_px = ep * (1 - stop_loss_pct / 100)
                 reason = f"止損 -{stop_loss_pct:.0f}%"
-            elif take_profit_pct and close >= ep * (1 + take_profit_pct / 100):
+            # V11.0: 止盈用 High 判斷（模擬盤中止盈單）
+            elif take_profit_pct and high_i >= ep * (1 + take_profit_pct / 100):
+                exit_px = ep * (1 + take_profit_pct / 100)
                 reason = f"止盈 +{take_profit_pct:.0f}%"
             elif max_hold_days  and days_held >= max_hold_days:
+                exit_px = close * (1 - slippage)
                 reason = f"超時 {max_hold_days}日"
             elif sell_arr[i]:
+                exit_px = close * (1 - slippage)   # V11.0: 賣出滑點
                 reason = "策略訊號"
 
             if reason:
-                proceeds  = pos["shares"] * close * (1 - commission)
-                pnl_pct   = (close - ep) / ep * 100
+                proceeds  = pos["shares"] * exit_px
+                pnl_pct   = (exit_px - ep) / ep * 100
                 pnl_hkd   = proceeds - pos["cost"]
                 cum_ret_pct += pnl_pct      # FIX：唯一更新點
                 trades.append({
@@ -708,8 +722,8 @@ def run_backtest(
 
     # 期末持倉強制平倉
     for pos in positions:
-        last_close = close_arr[-1]
-        proceeds   = pos["shares"] * last_close * (1 - commission)
+        last_close = close_arr[-1] * (1 - slippage)   # V11.0: 滑點
+        proceeds   = pos["shares"] * last_close
         pnl_pct    = (last_close - pos["entry_px"]) / pos["entry_px"] * 100
         pnl_hkd    = proceeds - pos["cost"]
         trades.append({
@@ -956,7 +970,7 @@ def run_grid_search(
     df: pd.DataFrame,
     buy_sigs: tuple, sell_sigs: tuple,
     trade_size: float,
-    commission: float,
+    slippage: float,
     sort_metric: str = "平均每筆%",
 ):
     sl_grid  = [0, 5, 10, 15, 20]
@@ -975,7 +989,7 @@ def run_grid_search(
         t, eq, _ = run_backtest(
             df, buy_sigs, sell_sigs,
             trade_size=trade_size,
-            commission=commission,
+            slippage=slippage,
             stop_loss_pct=sl  if sl  > 0 else None,
             take_profit_pct=tp if tp > 0 else None,
             max_hold_days=md   if md  > 0 else None,
@@ -1108,7 +1122,7 @@ def evaluate_signals(df: pd.DataFrame) -> dict:
          f"MA5={c['MA5']:.2f}  MA20={c['MA20']:.2f}  昨MA5={p['MA5']:.2f}",
          last["b2"]),
         ("③ 底背離（價創新低 MACD未）",
-         f"DIF={c['DIF']:.4f}  RSI={c['RSI']:.1f}  需RSI<40 + swing low背離",
+         f"DIF={c['DIF']:.4f}  RSI={c['RSI']:.1f}  需RSI<40 + swing low背離 + 價差>3%",
          last["b3"]),
         ("④ 底部形態突破（放量站上MA20）",
          f"站上MA20={'是' if bool(c['Close']>c['MA20']) else '否'}  量比={c['Volume']/vol_avg:.1f}x",
@@ -1125,8 +1139,8 @@ def evaluate_signals(df: pd.DataFrame) -> dict:
         ("⑧ 個股趨勢確認（MA20 > MA60）",
          f"MA20={c['MA20']:.2f}  MA60={c['MA60']:.2f}  {'✅ 上升趨勢' if last['b8'] else '❌ 非上升趨勢'}",
          last["b8"]),
-        ("⑨ 52週新高突破",
-         f"現價 {c['Close']:.2f}  52週高點區域",
+        ("⑨ 52週新高突破（真突破）",
+         f"現價 {c['Close']:.2f}  需 >= 52週高點（不含0.98折扣）",
          last["b9"]),
         ("⑩ 縮量回調至 MA20",
          f"MA20={c['MA20']:.2f}  量比={c['Volume']/vol_avg:.1f}x（需<0.8x，上升趨勢中）",
@@ -1238,7 +1252,7 @@ with st.sidebar:
 # ③ 主 UI
 # ══════════════════════════════════════════════════════════════════
 STOCKS = load_stocks()
-st.title("🏹 港股狙擊手 V10.9")
+st.title("🏹 港股狙擊手 V11.0")
 tabs = st.tabs(["🌍 指數", "🏆 跑贏大市", "🟢 買入掃描", "🔴 賣出掃描", "🔍 分析", "📊 回測", "🔬 Walk-Forward", "📡 訊號診斷"])
 
 # ── TAB 0：指數 ───────────────────────────────────────────────────
@@ -1645,7 +1659,7 @@ with tabs[4]:
 
 # ── TAB 5：回測 ───────────────────────────────────────────────────
 with tabs[5]:
-    st.subheader("📊 策略回測系統 V10.9")
+    st.subheader("📊 策略回測系統 V11.0")
 
     bt_mode = st.radio(
         "回測模式",
@@ -1698,7 +1712,7 @@ with tabs[5]:
             bt_period     = st.selectbox("回測週期", ["1y", "2y", "5y"], index=1, key="bt_period")
             bt_capital    = st.number_input("每筆交易金額 (HKD)", value=100_000, step=10_000,
                                              min_value=10_000, key="bt_capital")
-            bt_commission = st.slider("佣金率 (%, 港股建議 0.20)", 0.0, 0.5, 0.20, 0.05, key="bt_commission") / 100
+            bt_slippage = st.slider("滑點 (%, 港股建議 0.10-0.30)", 0.0, 1.0, 0.20, 0.05, key="bt_slippage") / 100
         with p_col2:
             bt_sl      = st.number_input("止損 % (0=不啟用)",       value=0.0, step=1.0,
                                           min_value=0.0, max_value=50.0,  key="bt_sl")
@@ -1748,7 +1762,7 @@ with tabs[5]:
                     trades, equity_df, _ = run_backtest(
                         df_bt, buy_sigs, sell_sigs,
                         trade_size=float(bt_capital),
-                        commission=bt_commission,
+                        slippage=bt_slippage,
                         stop_loss_pct=sl_val, take_profit_pct=tp_val, max_hold_days=md_val,
                     )
                     metrics = calc_bt_metrics(trades, equity_df, float(bt_capital))
@@ -1780,7 +1794,7 @@ with tabs[5]:
                     df_gs = run_grid_search(
                         df_bt_gs, buy_sigs, sell_sigs,
                         trade_size=float(bt_capital),
-                        commission=bt_commission,
+                        slippage=bt_slippage,
                         sort_metric=gs_sort,
                     )
                     if df_gs.empty:
@@ -1860,7 +1874,7 @@ with tabs[5]:
                         trades_s, equity_s, _ = run_backtest(
                             df_s, buy_sigs, sell_sigs,
                             trade_size=float(bt_capital),
-                            commission=bt_commission,
+                            slippage=bt_slippage,
                             stop_loss_pct=sl_val, take_profit_pct=tp_val, max_hold_days=md_val,
                             _precomputed=pre_s,
                         )
@@ -2018,7 +2032,7 @@ def run_walk_forward(
     is_months: int = 12,
     oos_months: int = 3,
     trade_size: float = 100_000,
-    commission: float = 0.002,
+    slippage: float = 0.002,
     stop_loss_pct: float = None,
     take_profit_pct: float = None,
     max_hold_days: int = None,
@@ -2058,7 +2072,7 @@ def run_walk_forward(
         pre_is = precompute_signals(is_df)
         is_trades, is_equity, _ = run_backtest(
             is_df, buy_sigs, sell_sigs,
-            trade_size=trade_size, commission=commission,
+            trade_size=trade_size, slippage=slippage,
             stop_loss_pct=stop_loss_pct,
             take_profit_pct=take_profit_pct,
             max_hold_days=max_hold_days,
@@ -2075,7 +2089,7 @@ def run_walk_forward(
         # 2. run_backtest 跑全段（warmup 部分的交易會被 mask 過濾）
         oos_trades_all, _, _ = run_backtest(
             oos_full, buy_sigs, sell_sigs,
-            trade_size=trade_size, commission=commission,
+            trade_size=trade_size, slippage=slippage,
             stop_loss_pct=stop_loss_pct,
             take_profit_pct=take_profit_pct,
             max_hold_days=max_hold_days,
@@ -2495,7 +2509,7 @@ with tabs[6]:
         with wf_col2:
             wf_capital    = st.number_input("每筆交易金額 (HKD)", value=100_000,
                                              step=10_000, min_value=10_000, key="wf_capital")
-            wf_commission = st.slider("佣金率 (%)", 0.0, 0.5, 0.20, 0.05, key="wf_commission") / 100
+            wf_slippage = st.slider("滑點 (%)", 0.0, 1.0, 0.20, 0.05, key="wf_slippage") / 100
             wf_sl      = st.number_input("止損 % (0=不啟用)",    value=0.0, step=1.0,
                                           min_value=0.0, max_value=50.0, key="wf_sl")
             wf_tp      = st.number_input("止盈 % (0=不啟用)",    value=0.0, step=5.0,
@@ -2540,7 +2554,7 @@ with tabs[6]:
                         is_months=wf_is_months,
                         oos_months=wf_oos_months,
                         trade_size=float(wf_capital),
-                        commission=wf_commission,
+                        slippage=wf_slippage,
                         stop_loss_pct=wf_sl_val,
                         take_profit_pct=wf_tp_val,
                         max_hold_days=wf_md_val,
