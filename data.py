@@ -1,0 +1,190 @@
+# ══════════════════════════════════════════════════════════════════
+# data.py — 數據下載、緩存、TradingView 篩選
+# ══════════════════════════════════════════════════════════════════
+
+import os
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+from datetime import datetime
+import requests
+
+from config import TV_URL, TV_HEADERS
+from indicators import calculate_indicators
+
+
+# ── 股票清單 ───────────────────────────────────────────────────────
+def load_stocks_from_file() -> list:
+    if os.path.exists("stocks.txt"):
+        stocks = [
+            line.split("#")[0].strip()
+            for line in open("stocks.txt", "r", encoding="utf-8")
+            if ".HK" in line
+        ]
+        if stocks:
+            return stocks
+    return ["0700.HK", "9988.HK", "3690.HK"]
+
+
+def load_stocks() -> list:
+    if st.session_state.get("stocks"):
+        return st.session_state["stocks"]
+    stocks = load_stocks_from_file()
+    st.session_state["stocks"] = stocks
+    return stocks
+
+
+# ── 時區安全處理 ────────────────────────────────────────────────────
+def normalize_index(df: pd.DataFrame) -> pd.DataFrame:
+    try:
+        if df.index.tz is not None:
+            df.index = df.index.tz_convert("Asia/Hong_Kong").tz_localize(None)
+        else:
+            df.index = pd.to_datetime(df.index)
+    except Exception:
+        df.index = pd.to_datetime(df.index, utc=True).tz_localize(None)
+    return df
+
+
+# ── MultiIndex 展平 ─────────────────────────────────────────────────
+def flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [col[0] for col in df.columns]
+    df.columns = [str(c).strip() for c in df.columns]
+    return df
+
+
+# ── 異常值過濾 ────────────────────────────────────────────────────
+def filter_anomalies(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    vol_ma    = df["Volume"].rolling(20, min_periods=10).median()
+    price_chg = df["Close"].pct_change().abs()
+    vol_bad   = vol_ma.notna() & (df["Volume"] > vol_ma * 10)
+    price_bad = price_chg > 0.50
+    bad = vol_bad | price_bad
+    return df[~bad].copy()
+
+
+# ── 單股下載 ────────────────────────────────────────────────────────
+def get_stock_data(ticker: str, period: str = "1y") -> pd.DataFrame:
+    try:
+        if ticker == "^HSTECH":
+            for sym in ["800700.HK", "^HSTECH", "3032.HK"]:
+                df = yf.download(sym, period=period, progress=False, auto_adjust=True)
+                if not df.empty:
+                    break
+        elif ticker == "^HSI":
+            for sym in ["^HSI", "2800.HK"]:
+                df = yf.download(sym, period=period, progress=False, auto_adjust=True)
+                if not df.empty:
+                    break
+        else:
+            df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
+
+        if df.empty:
+            return pd.DataFrame()
+        df = flatten_columns(df)
+        df = normalize_index(df)
+        df = df.dropna(subset=["Close"])
+        df = filter_anomalies(df)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+# ── 批量下載 ────────────────────────────────────────────────────────
+def batch_download(tickers: list, period: str = "1y") -> dict:
+    cache = {}
+    try:
+        raw = yf.download(
+            tickers, period=period,
+            progress=False, auto_adjust=True,
+            group_by="ticker", threads=True,
+        )
+    except Exception:
+        return cache
+
+    if raw.empty:
+        return cache
+
+    if isinstance(raw.columns, pd.MultiIndex):
+        lvl0 = raw.columns.get_level_values(0).unique().tolist()
+        ohlcv = {"Open", "High", "Low", "Close", "Volume"}
+        ticker_level = 1 if set(lvl0) & ohlcv else 0
+    else:
+        ticker_level = None
+
+    for ticker in tickers:
+        try:
+            if ticker_level is None:
+                df = raw.copy()
+            elif ticker_level == 1:
+                if ticker not in raw.columns.get_level_values(1):
+                    continue
+                df = raw.xs(ticker, axis=1, level=1).copy()
+            else:
+                if ticker not in raw.columns.get_level_values(0):
+                    continue
+                df = raw.xs(ticker, axis=1, level=0).copy()
+
+            df = flatten_columns(df)
+            df = normalize_index(df)
+            df = df.dropna(subset=["Close"])
+            if len(df) < 60:
+                continue
+            cache[ticker] = calculate_indicators(df)
+        except Exception:
+            continue
+    return cache
+
+
+# ── TradingView Screener ──────────────────────────────────────────
+def fetch_stocks_from_tradingview(
+    min_cap_hkd: int = 10_000_000_000,
+    min_vol_hkd: int = 50_000_000,
+) -> list:
+    payload = {
+        "filter": [
+            {"left": "market_cap_basic",             "operation": "greater", "right": min_cap_hkd / 7.8},
+            {"left": "earnings_per_share_basic_ttm", "operation": "greater", "right": 0},
+            {"left": "average_volume_30d_calc",      "operation": "greater", "right": min_vol_hkd / 7.8},
+        ],
+        "markets": ["hongkong"],
+        "symbols": {"query": {"types": ["stock"]}, "tickers": []},
+        "columns": ["name", "description", "close", "market_cap_basic",
+                     "earnings_per_share_basic_ttm", "average_volume_30d_calc"],
+        "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
+        "range": [0, 1000],
+    }
+    resp = requests.post(TV_URL, headers=TV_HEADERS, json=payload, timeout=20)
+    resp.raise_for_status()
+    tickers = []
+    for row in resp.json().get("data", []):
+        d = row.get("d", [])
+        if not d:
+            continue
+        try:
+            tickers.append(f"{int(d[0]):04d}.HK")
+        except (ValueError, TypeError):
+            continue
+    return tickers
+
+
+# ── Cache 助手 ────────────────────────────────────────────────────
+def get_cached(ticker: str) -> pd.DataFrame:
+    cache = st.session_state.get("stock_cache", {})
+    if ticker in cache:
+        return cache[ticker]
+    df = get_stock_data(ticker)
+    if not df.empty:
+        return calculate_indicators(df)
+    return pd.DataFrame()
+
+
+def get_cache_label() -> str:
+    ts = st.session_state.get("cache_time")
+    n  = len(st.session_state.get("stock_cache", {}))
+    if ts and n:
+        return f"✅ 已緩存 {n} 隻｜{ts}"
+    return "⚠️ 尚未緩存"
