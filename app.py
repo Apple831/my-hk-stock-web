@@ -101,6 +101,8 @@ with tabs[4]:
 with tabs[5]:
     tab_backtest.render(STOCKS)
 with tabs[6]:
-    tab_walkforward.render()
+    # FIX: tab_walkforward.render() → render(STOCKS)
+    # 新版 tab_walkforward 加入了投資組合模式，需要 stocks 清單
+    tab_walkforward.render(STOCKS)
 with tabs[7]:
     tab_diagnosis.render(STOCKS)
