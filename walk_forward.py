@@ -7,11 +7,23 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from indicators import calculate_indicators, precompute_signals
-from backtest import run_backtest, calc_bt_metrics
+from backtest import run_backtest, calc_bt_metrics, build_hsi_filter
+
+
+# ── 改進二：helper — 把 buy_sigs tuple 與 extra_buy 合併（AND 邏輯）──
+def _merge_buy_sigs(buy_sigs: tuple, extra_buy: tuple) -> tuple:
+    """
+    把 extra_buy（如 b8 趨勢確認）疊加到原 buy_sigs 裏。
+    兩者都是長度 10 的 bool tuple，按位 OR 後再合併。
+    extra_buy 中 True 的位置，強制在 buy_sigs 裏也設 True（AND 入場要求）。
+    """
+    if not any(extra_buy):
+        return buy_sigs
+    return tuple(a or b for a, b in zip(buy_sigs, extra_buy))
 
 
 # ══════════════════════════════════════════════════════════════════
-# 單股 Walk-Forward（含 Fix 5：min_oos_trades 門檻）
+# 單股 Walk-Forward
 # ══════════════════════════════════════════════════════════════════
 
 def run_walk_forward(
@@ -25,9 +37,13 @@ def run_walk_forward(
     take_profit_pct: float = None,
     max_hold_days: int = None,
     min_oos_trades: int = 3,
+    hsi_filter: pd.Series = None,        # 改進二
+    extra_buy_sigs: tuple = None,        # 改進三（b8 等額外 AND 條件）
 ) -> list:
     if df.empty or len(df) < 60:
         return []
+
+    effective_buy = _merge_buy_sigs(buy_sigs, extra_buy_sigs or (False,)*10)
 
     results    = []
     total_days = len(df)
@@ -44,24 +60,28 @@ def run_walk_forward(
         if len(is_df) < 62 or len(oos_df) < 10:
             break
 
+        # ── IS ──────────────────────────────────────────────────
         pre_is = precompute_signals(is_df)
         is_trades, is_equity, _ = run_backtest(
-            is_df, buy_sigs, sell_sigs,
+            is_df, effective_buy, sell_sigs,
             trade_size=trade_size, slippage=slippage,
             stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct,
             max_hold_days=max_hold_days, _precomputed=pre_is,
+            market_filter_series=hsi_filter,
         )
         is_metrics = calc_bt_metrics(is_trades, is_equity, trade_size)
 
+        # ── OOS（含 61 日 warmup）────────────────────────────────
         warmup_start = max(0, start + is_days - 61)
         oos_full     = df.iloc[warmup_start : start + is_days + oos_days].copy()
         oos_full     = calculate_indicators(oos_full)
 
         oos_trades_all, _, _ = run_backtest(
-            oos_full, buy_sigs, sell_sigs,
+            oos_full, effective_buy, sell_sigs,
             trade_size=trade_size, slippage=slippage,
             stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct,
             max_hold_days=max_hold_days, _precomputed=None,
+            market_filter_series=hsi_filter,
         )
 
         oos_start_date = oos_df.index[0]
@@ -110,7 +130,7 @@ def run_walk_forward(
 
 
 # ══════════════════════════════════════════════════════════════════
-# FIX 4：投資組合 Walk-Forward
+# 投資組合 Walk-Forward
 # ══════════════════════════════════════════════════════════════════
 
 def _build_portfolio_equity(
@@ -118,27 +138,19 @@ def _build_portfolio_equity(
     date_range: pd.DatetimeIndex,
     trade_size: float,
 ) -> pd.DataFrame:
-    """
-    投資組合 equity curve（HKD P&L 累加法）。
-    每筆交易獨立佔用 trade_size，盈虧以 HKD 疊加。
-    equity = trade_size + cumulative_pnl_hkd
-    """
     if len(date_range) == 0:
         return pd.DataFrame()
-
     sell_map: dict = {}
     for t in trades:
         if "（持倉中）" not in t.get("賣出日期", ""):
             pnl_hkd = trade_size * t["回報%"] / 100
             sell_map.setdefault(t["_sell_date"], []).append(pnl_hkd)
-
     running_pnl = 0.0
     eq_rows = []
     for date in date_range:
         if date in sell_map:
             running_pnl += sum(sell_map[date])
         eq_rows.append({"date": date, "equity": trade_size + running_pnl})
-
     return pd.DataFrame(eq_rows).set_index("date")
 
 
@@ -154,14 +166,13 @@ def run_portfolio_walk_forward(
     take_profit_pct: float = None,
     max_hold_days: int = None,
     min_oos_trades: int = 5,
+    hsi_filter: pd.Series = None,        # 改進二
+    extra_buy_sigs: tuple = None,        # 改進三
 ) -> list:
-    """
-    投資組合級別 Walk-Forward。
-    聚合所有股票的交易解決單股樣本不足問題。
-    IS/OOS 按日曆日期對齊所有股票，equity 用 HKD P&L 累加。
-    """
     if not stock_data:
         return []
+
+    effective_buy = _merge_buy_sigs(buy_sigs, extra_buy_sigs or (False,)*10)
 
     ref_df     = max(stock_data.values(), key=len)
     all_dates  = ref_df.index
@@ -172,10 +183,10 @@ def run_portfolio_walk_forward(
     if total_days < is_days + oos_days:
         return []
 
-    results        = []
-    fold           = 1
-    start          = 0
-    n_total_folds  = max(1, (total_days - is_days) // oos_days)
+    results       = []
+    fold          = 1
+    start         = 0
+    n_total_folds = max(1, (total_days - is_days) // oos_days)
 
     pbar   = st.progress(0, text="投資組合 Walk-Forward 啟動...")
     status = st.empty()
@@ -209,16 +220,17 @@ def run_portfolio_walk_forward(
 
             pre_is = precompute_signals(is_df)
             is_t, _, _ = run_backtest(
-                is_df, buy_sigs, sell_sigs,
+                is_df, effective_buy, sell_sigs,
                 trade_size=trade_size, slippage=slippage,
                 stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct,
                 max_hold_days=max_hold_days, _precomputed=pre_is,
+                market_filter_series=hsi_filter,
             )
             for t in is_t:
                 t["ticker"] = ticker
             all_is_trades.extend(is_t)
 
-            # OOS 切片（含 61 日 warmup）
+            # OOS 切片（含 warmup）
             oos_start_pos = full_df.index.searchsorted(oos_start_date)
             warmup_pos    = max(0, oos_start_pos - 61)
             oos_full_df   = full_df.iloc[warmup_pos:].copy()
@@ -229,10 +241,11 @@ def run_portfolio_walk_forward(
                 continue
 
             oos_t_all, _, _ = run_backtest(
-                oos_full_df, buy_sigs, sell_sigs,
+                oos_full_df, effective_buy, sell_sigs,
                 trade_size=trade_size, slippage=slippage,
                 stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct,
                 max_hold_days=max_hold_days, _precomputed=None,
+                market_filter_series=hsi_filter,
             )
             oos_t = [t for t in oos_t_all if t["_buy_date"] >= oos_start_date]
             for t in oos_t:
@@ -240,7 +253,6 @@ def run_portfolio_walk_forward(
             all_oos_trades.extend(oos_t)
             n_stocks_run += 1
 
-        # equity curves
         is_date_range  = ref_df.index[(ref_df.index >= is_start_date)  & (ref_df.index <= is_end_date)]
         oos_date_range = ref_df.index[(ref_df.index >= oos_start_date) & (ref_df.index <= oos_end_date)]
 
@@ -286,13 +298,15 @@ def run_portfolio_walk_forward(
 # ══════════════════════════════════════════════════════════════════
 
 def _wf_degradation(is_ret: float, oos_ret: float) -> float:
-    if abs(is_ret) < 0.5:   # 原本是 < 1e-9，改成 < 0.5
-        return 0.0           # IS不足0.5%時退化率無意義，直接顯示N/A
+    # 改進二附帶修復：IS 不足 0.5% 時公式失效（分母趨近 0 → 爆炸）
+    # 返回 None，UI 顯示 "N/A" 而非天文數字
+    if abs(is_ret) < 0.5:
+        return None
     return (is_ret - oos_ret) / abs(is_ret) * 100
 
 
 # ══════════════════════════════════════════════════════════════════
-# 共用：結果展示（單股 & 投資組合均適用）
+# 共用：結果展示
 # ══════════════════════════════════════════════════════════════════
 
 def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio: bool = False):
@@ -300,7 +314,6 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
         st.warning("⚠️ 沒有足夠數據完成 Walk-Forward，請拉長回測週期或縮短 IS/OOS 窗口。")
         return
 
-    # ── 1. 彙總 rows ─────────────────────────────────────────────
     rows = []
     for r in wf_results:
         im  = r["is_metrics"]
@@ -308,18 +321,20 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
         is_ret  = im.get("平均每筆回報%", 0.0)
         oos_ret = om.get("平均每筆回報%", 0.0)
         deg     = _wf_degradation(is_ret, oos_ret)
+        deg_display = f"{deg:.1f}%" if deg is not None else "N/A (IS≈0)"
         row = {
             "Fold":        r["fold"],
             "IS 期間":     f"{r['is_start'].strftime('%Y-%m')} → {r['is_end'].strftime('%Y-%m')}",
             "OOS 期間":    f"{r['oos_start'].strftime('%Y-%m')} → {r['oos_end'].strftime('%Y-%m')}",
             "IS 均回報%":  round(is_ret, 2),
             "OOS 均回報%": round(oos_ret, 2),
-            "退化率%":     round(deg, 1),
+            "退化率%":     deg_display,
             "IS 勝率%":    round(im.get("勝率%", 0.0), 1),
             "OOS 勝率%":   round(om.get("勝率%", 0.0), 1),
             "IS 交易數":   im.get("交易次數", 0),
             "OOS 交易數":  r["oos_trade_count"],
             "有效":        "✅" if r["valid_oos"] else f"⚠️ 僅{r['oos_trade_count']}筆",
+            "_deg_raw":    deg,
         }
         if is_portfolio:
             row["股票數"] = r.get("n_stocks", "-")
@@ -327,23 +342,22 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
 
     df_summary = pd.DataFrame(rows)
 
-    # ── 2. 整體評分（只用有效 Fold）──────────────────────────────
-    valid_rows    = [r for r in rows if "✅" in r["有效"]]
+    valid_rows    = [r for r in rows if "✅" in r["有效"] and r["_deg_raw"] is not None]
     invalid_count = len(rows) - len(valid_rows)
 
     if invalid_count > 0:
-        hint = "建議改用投資組合模式或拉長 OOS 窗口至 6 個月。" if not is_portfolio \
+        hint = "建議改用投資組合模式或拉長 OOS 窗口。" if not is_portfolio \
                else "建議增加股票數量或減少入場條件。"
-        st.warning(f"⚠️ **{invalid_count} 個 Fold** OOS 交易不足門檻，已排除在評分之外。{hint}")
+        st.warning(f"⚠️ **{invalid_count} 個 Fold** OOS 交易不足或 IS≈0，已排除在評分之外。{hint}")
 
     if not valid_rows:
-        st.error("❌ 所有 Fold 均未達最低交易次數門檻，無法評估策略。")
+        st.error("❌ 所有 Fold 均未達標，無法評估策略。")
         _show_summary_table(df_summary, is_portfolio)
         return
 
     avg_is       = sum(r["IS 均回報%"]  for r in valid_rows) / len(valid_rows)
     avg_oos      = sum(r["OOS 均回報%"] for r in valid_rows) / len(valid_rows)
-    avg_deg      = sum(r["退化率%"]     for r in valid_rows) / len(valid_rows)
+    avg_deg      = sum(r["_deg_raw"]    for r in valid_rows) / len(valid_rows)
     oos_positive = sum(1 for r in valid_rows if r["OOS 均回報%"] > 0)
     oos_rate     = oos_positive / len(valid_rows) * 100
 
@@ -368,7 +382,7 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
         f"<div style='font-size:20px;font-weight:bold'>{verdict} {mode_label}</div>"
         f"<div style='font-size:13px;margin-top:4px;opacity:0.85'>{verdict_detail}</div>"
         f"<div style='font-size:12px;margin-top:6px;opacity:0.6'>"
-        f"有效 Fold：{len(valid_rows)}/{len(rows)}　｜　無效（交易不足）：{invalid_count}</div>"
+        f"有效 Fold：{len(valid_rows)}/{len(rows)}　｜　無效：{invalid_count}</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -385,7 +399,6 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
 
     st.divider()
 
-    # ── 3. IS vs OOS 長條圖 ───────────────────────────────────────
     st.markdown("### 📊 逐 Fold IS vs OOS 平均每筆回報%")
     fold_labels = [
         f"Fold {r['Fold']}\n{r['OOS 期間'].split(' → ')[0]}"
@@ -396,10 +409,7 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
     fig_bar.add_trace(go.Bar(
         name="In-Sample", x=fold_labels,
         y=[r["IS 均回報%"] for r in rows],
-        marker_color=[
-            "rgba(100,180,255,0.7)" if r["有效"] == "✅" else "rgba(100,180,255,0.25)"
-            for r in rows
-        ],
+        marker_color=["rgba(100,180,255,0.7)" if r["有效"] == "✅" else "rgba(100,180,255,0.25)" for r in rows],
         text=[f"{v:+.1f}%" for v in [r["IS 均回報%"] for r in rows]],
         textposition="outside",
     ))
@@ -423,22 +433,23 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
     )
     st.plotly_chart(fig_bar, use_container_width=True)
 
-    # ── 4. 退化率趨勢 ─────────────────────────────────────────────
-    st.markdown("### 📉 退化率趨勢（灰色 = 無效 Fold）")
+    st.markdown("### 📉 退化率趨勢（灰色 = 無效 Fold 或 IS≈0）")
+    deg_vals  = [r["_deg_raw"] if r["_deg_raw"] is not None else 0 for r in rows]
+    deg_texts = [f"{r['退化率%']}" for r in rows]
     fig_deg = go.Figure()
     fig_deg.add_trace(go.Scatter(
         x=[f"Fold {r['Fold']}" for r in rows],
-        y=[r["退化率%"] for r in rows],
+        y=deg_vals,
         mode="lines+markers+text",
-        text=[f"{v:.0f}%" for v in [r["退化率%"] for r in rows]],
+        text=deg_texts,
         textposition="top center",
         line=dict(color="#f9a825", width=2),
         marker=dict(
             size=10,
             color=[
-                "rgba(150,150,150,0.4)" if not wf_r["valid_oos"]
-                else ("#26a69a" if r["退化率%"] < 40 else ("#f9a825" if r["退化率%"] < 65 else "#ef5350"))
-                for r, wf_r in zip(rows, wf_results)
+                "rgba(150,150,150,0.4)" if (not wf_r["valid_oos"] or r["_deg_raw"] is None)
+                else ("#26a69a" if d < 40 else ("#f9a825" if d < 65 else "#ef5350"))
+                for r, wf_r, d in zip(rows, wf_results, deg_vals)
             ],
         ),
     ))
@@ -453,7 +464,6 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
     )
     st.plotly_chart(fig_deg, use_container_width=True)
 
-    # ── 5. OOS 拼接曲線（只含有效 Fold）─────────────────────────
     st.markdown("### 📈 OOS 拼接資金曲線（只含有效 Fold）")
     oos_pieces      = []
     running_capital = trade_size
@@ -496,12 +506,10 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
     else:
         st.info("沒有有效 Fold，無法繪製 OOS 拼接曲線。")
 
-    # ── 6. 彙總表 ─────────────────────────────────────────────────
     st.divider()
     st.markdown("### 📑 逐 Fold 詳細數據")
     _show_summary_table(df_summary, is_portfolio)
 
-    # ── 7. 逐 Fold 展開詳情 ───────────────────────────────────────
     st.divider()
     st.markdown("### 🔬 逐 Fold 交易記錄")
     for r, row in zip(wf_results, rows):
@@ -517,9 +525,7 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
         )
         with st.expander(label):
             if not valid:
-                st.warning(
-                    f"⚠️ 此 Fold OOS 僅 **{r['oos_trade_count']} 筆**交易，統計上不可靠，已排除在評分之外。"
-                )
+                st.warning(f"⚠️ 此 Fold OOS 僅 **{r['oos_trade_count']} 筆**交易，排除在評分之外。")
             if is_portfolio and r.get("n_stocks"):
                 st.caption(f"本 Fold 實際跑 {r['n_stocks']} 隻股票")
 
@@ -539,9 +545,10 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
                 st.markdown("**📗 Out-of-Sample**")
                 if om:
                     oos_ret = om.get("平均每筆回報%", 0)
-                    st.metric("均回報%",  f"{oos_ret:+.2f}%",
-                              delta=f"退化 {_wf_degradation(im.get('平均每筆回報%', 0), oos_ret):.1f}%",
-                              delta_color="off")
+                    is_ret_v = im.get("平均每筆回報%", 0)
+                    deg_v = _wf_degradation(is_ret_v, oos_ret)
+                    deg_str = f"退化 {deg_v:.1f}%" if deg_v is not None else "IS≈0，退化率無效"
+                    st.metric("均回報%",  f"{oos_ret:+.2f}%", delta=deg_str, delta_color="off")
                     st.metric("勝率",     f"{om.get('勝率%', 0):.1f}%")
                     st.metric("交易次數", f"{om.get('交易次數', 0)}")
                     pf = om.get("Profit Factor", 0)
@@ -555,8 +562,8 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
                                 "回報%", "盈虧(HKD)", "持倉天數", "賣出原因"]
                 if is_portfolio:
                     display_cols = ["ticker"] + display_cols
-                avail  = [c for c in display_cols if c in r["oos_trades"][0]]
-                df_t   = pd.DataFrame(r["oos_trades"])[avail]
+                avail = [c for c in display_cols if c in r["oos_trades"][0]]
+                df_t  = pd.DataFrame(r["oos_trades"])[avail]
 
                 def _cr(val):
                     try:
@@ -566,13 +573,13 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
                         return ""
 
                 scols = [c for c in ["回報%", "盈虧(HKD)"] if c in df_t.columns]
-                st.dataframe(
-                    df_t.style.map(_cr, subset=scols),
-                    use_container_width=True, hide_index=True,
-                )
+                st.dataframe(df_t.style.map(_cr, subset=scols),
+                             use_container_width=True, hide_index=True)
 
 
 def _show_summary_table(df_summary: pd.DataFrame, is_portfolio: bool):
+    display_df = df_summary.drop(columns=["_deg_raw"], errors="ignore")
+
     def _color_ret(val):
         try:
             v = float(val)
@@ -583,8 +590,10 @@ def _show_summary_table(df_summary: pd.DataFrame, is_portfolio: bool):
         return ""
 
     def _color_deg(val):
+        s = str(val)
+        if "N/A" in s: return "color:#888"
         try:
-            v = float(val)
+            v = float(s.replace("%", ""))
             if v < 40:  return "color:#26a69a"
             if v < 65:  return "color:#f9a825"
             return "color:#ef5350;font-weight:bold"
@@ -598,16 +607,11 @@ def _show_summary_table(df_summary: pd.DataFrame, is_portfolio: bool):
         return ""
 
     st.dataframe(
-        df_summary.style
+        display_df.style
         .map(_color_ret,   subset=["IS 均回報%", "OOS 均回報%"])
         .map(_color_deg,   subset=["退化率%"])
         .map(_color_valid, subset=["有效"])
-        .format({
-            "IS 均回報%":  "{:+.2f}%",
-            "OOS 均回報%": "{:+.2f}%",
-            "退化率%":     "{:.1f}%",
-            "IS 勝率%":    "{:.1f}%",
-            "OOS 勝率%":   "{:.1f}%",
-        }),
+        .format({"IS 均回報%": "{:+.2f}%", "OOS 均回報%": "{:+.2f}%",
+                 "IS 勝率%": "{:.1f}%",   "OOS 勝率%":  "{:.1f}%"}),
         use_container_width=True, hide_index=True,
     )
