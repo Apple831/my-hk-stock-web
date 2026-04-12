@@ -1,7 +1,8 @@
 # tabs/tab_walkforward.py
 import streamlit as st
-from data import get_stock_data, batch_download
+from data import get_stock_data
 from indicators import calculate_indicators
+from backtest import build_hsi_filter
 from walk_forward import (
     run_walk_forward, run_portfolio_walk_forward,
     show_walk_forward_results,
@@ -22,6 +23,7 @@ def render(stocks: list):
     | 40-65% | 🟡 輕度過擬合 |
     | > 65%  | 🔴 嚴重過擬合 |
     | OOS < 0 | 🔴 危險 |
+    | N/A    | IS≈0，退化率公式失效，僅看 OOS 數值 |
     """)
     st.divider()
 
@@ -29,12 +31,7 @@ def render(stocks: list):
     wf_mode = st.radio(
         "驗證模式",
         ["🔍 單股模式", "📊 投資組合模式"],
-        horizontal=True,
-        key="wf_mode",
-        help=(
-            "單股：對單一股票跑 WF，OOS 交易次數少，統計意義有限。\n"
-            "投資組合：聚合所有股票交易，解決樣本不足問題，結果更可信。"
-        ),
+        horizontal=True, key="wf_mode",
     )
     st.divider()
 
@@ -71,6 +68,44 @@ def render(stocks: list):
         sell_custom = (False,)*7
 
     buy_sigs, sell_sigs = get_preset_sigs(_preset, buy_custom, sell_custom)
+
+    # ══════════════════════════════════════════════════════════════
+    # 改進二 + 改進三：共用進階過濾器設定
+    # ══════════════════════════════════════════════════════════════
+    st.divider()
+    st.markdown("#### 🔧 進階入場過濾器（改進二 & 三）")
+
+    adv1, adv2 = st.columns(2)
+    with adv1:
+        use_hsi_filter = st.checkbox(
+            "🌐 改進二：啟用恒指趨勢過濾（恒指 MA20 > MA60 才允許入場）",
+            value=False, key="wf_hsi_filter",
+            help=(
+                "只有在恒指本身處於上升趨勢（MA20 > MA60）時才觸發買入。\n"
+                "目標：過濾橫盤 / 熊市環境的假訊號（如 F3 2023-04~10）。\n"
+                "代價：訊號頻率會降低，部分 Fold 交易數可能不足門檻。"
+            ),
+        )
+    with adv2:
+        use_b8_filter = st.checkbox(
+            "📈 改進三：加入個股趨勢確認（b8：個股 MA20 > MA60）",
+            value=False, key="wf_b8_filter",
+            help=(
+                "在原有買入條件基礎上，額外要求個股本身 MA20 > MA60。\n"
+                "目標：排除下降趨勢中的底部假突破。\n"
+                "代價：訊號頻率進一步降低。"
+            ),
+        )
+
+    # 改進二：b8 extra sigs tuple
+    extra_buy = (False,False,False,False,False,False,False,use_b8_filter,False,False)
+
+    if use_hsi_filter or use_b8_filter:
+        active_filters = []
+        if use_hsi_filter: active_filters.append("恒指 MA20>MA60")
+        if use_b8_filter:  active_filters.append("個股 MA20>MA60（b8）")
+        st.info(f"🔧 已啟用：{' + '.join(active_filters)}")
+
     st.divider()
 
     # ══════════════════════════════════════════════════════════════
@@ -85,24 +120,19 @@ def render(stocks: list):
                 wf_is_months  = st.slider("In-Sample 窗口（月）", 6, 24, 12, 3, key="wf_is_months")
                 wf_oos_months = st.slider("Out-of-Sample 窗口（月）", 1, 12, 3, 1, key="wf_oos_months")
             with c2:
-                wf_capital      = st.number_input("每筆交易金額 (HKD)", value=100_000, step=10_000, min_value=10_000, key="wf_capital")
-                wf_slippage     = st.slider("滑點 (%)", 0.0, 1.0, 0.20, 0.05, key="wf_slippage") / 100
-                wf_sl           = st.number_input("止損 %（0=不啟用）", value=0.0, step=1.0, min_value=0.0, max_value=50.0, key="wf_sl")
-                wf_tp           = st.number_input("止盈 %（0=不啟用）", value=0.0, step=5.0, min_value=0.0, max_value=200.0, key="wf_tp")
-                wf_maxdays      = st.number_input("最長持倉天數（0=不限）", value=0, step=5, min_value=0, key="wf_maxdays")
-                # FIX 5
-                wf_min_oos      = st.number_input(
-                    "每 Fold 最低有效 OOS 交易數",
-                    value=3, min_value=1, max_value=20, step=1, key="wf_min_oos",
-                    help="低於此數的 Fold 標記為⚠️並排除在評分之外。單股模式建議設 3。",
-                )
+                wf_capital  = st.number_input("每筆交易金額 (HKD)", value=100_000, step=10_000, min_value=10_000, key="wf_capital")
+                wf_slippage = st.slider("滑點 (%)", 0.0, 1.0, 0.20, 0.05, key="wf_slippage") / 100
+                wf_sl       = st.number_input("止損 %（0=不啟用）", value=0.0, step=1.0, min_value=0.0, max_value=50.0, key="wf_sl")
+                wf_tp       = st.number_input("止盈 %（0=不啟用）", value=0.0, step=5.0, min_value=0.0, max_value=200.0, key="wf_tp")
+                wf_maxdays  = st.number_input("最長持倉天數（0=不限）", value=0, step=5, min_value=0, key="wf_maxdays")
+                wf_min_oos  = st.number_input("每 Fold 最低有效 OOS 交易數", value=3, min_value=1, max_value=20, step=1, key="wf_min_oos")
 
             total_m   = {"3y":36,"5y":60,"10y":120}[wf_period]
             est_folds = max(0, (total_m - wf_is_months) // wf_oos_months)
             st.info(f"📋 預計約 **{est_folds} 個 Fold**")
 
-        sl_v = wf_sl     if wf_sl     > 0 else None
-        tp_v = wf_tp     if wf_tp     > 0 else None
+        sl_v = wf_sl    if wf_sl    > 0 else None
+        tp_v = wf_tp    if wf_tp    > 0 else None
         md_v = int(wf_maxdays) if wf_maxdays > 0 else None
 
         if st.button("🔬 開始 Walk-Forward 驗證", type="primary", key="run_wf"):
@@ -112,6 +142,19 @@ def render(stocks: list):
                 st.warning("⚠️ 請設定至少一種出場條件"); return
             if est_folds < 2:
                 st.warning("⚠️ 預計 Fold 數不足 2"); return
+
+            # 改進二：下載 HSI 並建立過濾器
+            hsi_filter_series = None
+            if use_hsi_filter:
+                with st.spinner("下載恒指數據以建立市場過濾器..."):
+                    df_hsi = get_stock_data("^HSI", period=wf_period)
+                if df_hsi.empty:
+                    st.warning("⚠️ 無法取得恒指數據，市場過濾器將停用。")
+                else:
+                    df_hsi = calculate_indicators(df_hsi)
+                    hsi_filter_series = build_hsi_filter(df_hsi)
+                    bull_pct = hsi_filter_series.mean() * 100
+                    st.info(f"🌐 恒指過濾器已建立：過去 {wf_period} 中 {bull_pct:.0f}% 的交易日允許入場")
 
             with st.spinner(f"正在下載 {wf_ticker}（{wf_period}）..."):
                 df_wf = get_stock_data(wf_ticker, period=wf_period)
@@ -128,6 +171,8 @@ def render(stocks: list):
                     trade_size=float(wf_capital), slippage=wf_slippage,
                     stop_loss_pct=sl_v, take_profit_pct=tp_v, max_hold_days=md_v,
                     min_oos_trades=int(wf_min_oos),
+                    hsi_filter=hsi_filter_series,
+                    extra_buy_sigs=extra_buy if use_b8_filter else None,
                 )
 
             if not results:
@@ -142,11 +187,9 @@ def render(stocks: list):
     else:
         st.markdown("""
         > **投資組合模式**：每個 Fold 同時對所有選定股票跑回測，把所有交易聚合計算指標。
-        > 解決單股 OOS 只有 0-2 筆交易的統計失效問題。
-        > OOS 預設 **6 個月**，門檻預設 **5 筆**。
+        > 解決單股 OOS 交易次數不足的問題。OOS 預設 **6 個月**。
         """)
 
-        # 股票選擇
         col_a, col_b = st.columns([3, 1])
         with col_a:
             use_all = st.checkbox("使用完整股票清單", value=True, key="wf_port_all")
@@ -166,31 +209,23 @@ def render(stocks: list):
         with st.expander("⚙️ 投資組合 Walk-Forward 參數", expanded=True):
             c1, c2 = st.columns(2)
             with c1:
-                wf_port_period    = st.selectbox("總數據週期", ["3y","5y","10y"], index=1, key="wf_port_period")
-                wf_port_is        = st.slider("In-Sample 窗口（月）", 6, 24, 12, 3, key="wf_port_is")
-                # FIX 4：OOS 預設 6 個月
-                wf_port_oos       = st.slider(
-                    "Out-of-Sample 窗口（月）", 3, 12, 6, 1, key="wf_port_oos",
-                    help="投資組合模式建議 6 個月，確保每個 Fold 有足夠交易次數。",
-                )
-                # FIX 5：門檻
-                wf_port_min_trades = st.number_input(
-                    "每 Fold 最低有效 OOS 交易數",
-                    value=5, min_value=1, max_value=50, step=1, key="wf_port_min",
-                    help="聚合所有股票後，OOS 交易數應大幅提升。建議設 5-10。",
-                )
+                wf_port_period = st.selectbox("總數據週期", ["3y","5y","10y"], index=1, key="wf_port_period")
+                wf_port_is     = st.slider("In-Sample 窗口（月）", 6, 24, 12, 3, key="wf_port_is")
+                wf_port_oos    = st.slider("Out-of-Sample 窗口（月）", 3, 12, 6, 1, key="wf_port_oos",
+                                           help="投資組合模式建議 6 個月。")
+                wf_port_min    = st.number_input("每 Fold 最低有效 OOS 交易數", value=5, min_value=1, max_value=50, step=1, key="wf_port_min")
             with c2:
-                wf_port_capital  = st.number_input("每筆交易金額 (HKD)", value=100_000, step=10_000, min_value=10_000, key="wf_port_capital")
-                wf_port_slip     = st.slider("滑點 (%)", 0.0, 1.0, 0.20, 0.05, key="wf_port_slip") / 100
-                wf_port_sl       = st.number_input("止損 %（0=不啟用）", value=0.0, step=1.0, min_value=0.0, max_value=50.0, key="wf_port_sl")
-                wf_port_tp       = st.number_input("止盈 %（0=不啟用）", value=0.0, step=5.0, min_value=0.0, max_value=200.0, key="wf_port_tp")
-                wf_port_maxdays  = st.number_input("最長持倉天數（0=不限）", value=0, step=5, min_value=0, key="wf_port_maxdays")
+                wf_port_capital = st.number_input("每筆交易金額 (HKD)", value=100_000, step=10_000, min_value=10_000, key="wf_port_capital")
+                wf_port_slip    = st.slider("滑點 (%)", 0.0, 1.0, 0.20, 0.05, key="wf_port_slip") / 100
+                wf_port_sl      = st.number_input("止損 %（0=不啟用）", value=0.0, step=1.0, min_value=0.0, max_value=50.0, key="wf_port_sl")
+                wf_port_tp      = st.number_input("止盈 %（0=不啟用）", value=0.0, step=5.0, min_value=0.0, max_value=200.0, key="wf_port_tp")
+                wf_port_maxdays = st.number_input("最長持倉天數（0=不限）", value=0, step=5, min_value=0, key="wf_port_maxdays")
 
             total_m_p   = {"3y":36,"5y":60,"10y":120}[wf_port_period]
             est_folds_p = max(0, (total_m_p - wf_port_is) // wf_port_oos)
             st.info(
                 f"📋 預計約 **{est_folds_p} 個 Fold** × {n_sel} 隻股票　｜　"
-                f"預計每 Fold OOS 交易：{n_sel} 隻 × 約 2 筆 ≈ **{n_sel * 2} 筆**（視策略而定）"
+                f"預計每 Fold OOS：{n_sel} 隻 × 約 2 筆 ≈ **{n_sel * 2} 筆**（視策略而定）"
             )
 
         sl_pv = wf_port_sl     if wf_port_sl     > 0 else None
@@ -204,9 +239,21 @@ def render(stocks: list):
             if not any(sell_sigs) and not wf_port_sl and not wf_port_tp and not wf_port_maxdays:
                 st.warning("⚠️ 請設定至少一種出場條件"); return
             if est_folds_p < 2:
-                st.warning("⚠️ 預計 Fold 數不足 2，請拉長週期或縮短窗口"); return
+                st.warning("⚠️ 預計 Fold 數不足 2"); return
 
-            # 下載所有股票的長週期數據（不依賴掃描緩存，因為週期可能不同）
+            # 改進二：HSI 過濾器
+            hsi_filter_series = None
+            if use_hsi_filter:
+                with st.spinner("下載恒指數據以建立市場過濾器..."):
+                    df_hsi = get_stock_data("^HSI", period=wf_port_period)
+                if df_hsi.empty:
+                    st.warning("⚠️ 無法取得恒指數據，市場過濾器將停用。")
+                else:
+                    df_hsi = calculate_indicators(df_hsi)
+                    hsi_filter_series = build_hsi_filter(df_hsi)
+                    bull_pct = hsi_filter_series.mean() * 100
+                    st.info(f"🌐 恒指過濾器已建立：{bull_pct:.0f}% 交易日允許入場")
+
             stock_data = {}
             with st.spinner(f"下載 {len(final_stocks)} 隻股票（{wf_port_period}）數據..."):
                 dl_pbar = st.progress(0)
@@ -220,10 +267,7 @@ def render(stocks: list):
             if not stock_data:
                 st.error("❌ 無法取得任何股票數據"); return
 
-            st.info(
-                f"📊 成功下載 **{len(stock_data)}/{len(final_stocks)}** 隻股票　｜　"
-                f"預計 Fold 數：**{est_folds_p}**"
-            )
+            st.info(f"📊 成功下載 **{len(stock_data)}/{len(final_stocks)}** 隻股票")
 
             results = run_portfolio_walk_forward(
                 stock_data,
@@ -231,28 +275,30 @@ def render(stocks: list):
                 is_months=wf_port_is, oos_months=wf_port_oos,
                 trade_size=float(wf_port_capital), slippage=wf_port_slip,
                 stop_loss_pct=sl_pv, take_profit_pct=tp_pv, max_hold_days=md_pv,
-                min_oos_trades=int(wf_port_min_trades),
+                min_oos_trades=int(wf_port_min),
+                hsi_filter=hsi_filter_series,
+                extra_buy_sigs=extra_buy if use_b8_filter else None,
             )
 
             if not results:
-                st.warning("⚠️ Walk-Forward 未能生成任何 Fold，請嘗試拉長週期。")
+                st.warning("⚠️ Walk-Forward 未能生成任何 Fold。")
             else:
                 st.success(f"✅ 完成！共 {len(results)} 個 Fold，聚合 {len(stock_data)} 隻股票")
                 show_walk_forward_results(results, float(wf_port_capital), is_portfolio=True)
 
-    # ── 說明 ──────────────────────────────────────────────────────
     with st.expander("📖 如何解讀結果？"):
         st.markdown("""
         **退化率公式**：`(IS均回報 − OOS均回報) / |IS均回報| × 100%`
 
-        **⚠️ 無效 Fold**：OOS 交易數低於門檻的 Fold 被標記灰色，不納入評分，但仍顯示在圖表中。
+        **N/A**：IS 均回報 < 0.5% 時，退化率公式因分母趨近零而失效，顯示 N/A。此時只看 OOS 數值本身。
+
+        **改進二（恒指過濾）的作用**：只在恒指 MA20 > MA60 的日子允許入場，過濾橫盤/熊市假訊號。
+        預期效果：F3（2023年橫盤）虧損收窄或消失；代價是部分有效 Fold 的交易數會減少。
+
+        **改進三（b8 個股趨勢確認）的作用**：額外要求個股本身在上升趨勢才入場。
+        與改進二疊加使用會大幅降低訊號頻率，需確認 OOS 交易數仍達門檻。
 
         **OOS 拼接資金曲線**是最重要的圖表，只含有效 Fold。
 
-        **單股 vs 投資組合模式對比**：
-        - 單股：每 Fold OOS 通常 0-3 筆，統計上不可靠，退化率數字噪音極大
-        - 投資組合：每 Fold OOS 通常 20-80 筆，統計意義大幅提升
-
-        **Fold 數建議**：至少 5 個有效 Fold。
-        推薦：投資組合 + 5y + IS=12月 + OOS=6月 → 約 8 個 Fold。
+        **建議測試順序**：先單獨測改進二 → 再單獨測改進三 → 最後測兩者疊加。
         """)
