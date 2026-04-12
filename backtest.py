@@ -17,6 +17,10 @@ def run_backtest(
     take_profit_pct: float = None,
     max_hold_days: int = None,
     _precomputed: dict = None,
+    # ── 改進二：恒指市場過濾器 ─────────────────────────────────────
+    # pd.Series[bool]，index 為交易日，True = 恒指 MA20 > MA60（牛市）
+    # None = 不啟用過濾，維持原有行為
+    market_filter_series: pd.Series = None,
 ) -> tuple:
     sigs = _precomputed if _precomputed is not None else precompute_signals(df)
 
@@ -29,6 +33,18 @@ def run_backtest(
             buy_signal &= sigs[nm]
     else:
         buy_signal = pd.Series(False, index=df.index)
+
+    # ── 改進二：把恒指過濾器疊加到 buy_signal ─────────────────────
+    # 用 reindex + ffill 對齊日期（HSI 和個股的交易日可能略有不同）
+    # 未對齊的日期 fillna(True) — 寧可放行，不誤殺
+    if market_filter_series is not None and not market_filter_series.empty:
+        hsi_aligned = (
+            market_filter_series
+            .reindex(df.index, method="ffill")
+            .fillna(True)
+        )
+        buy_signal = buy_signal & hsi_aligned
+    # ── END 改進二 ────────────────────────────────────────────────
 
     if sell_active:
         sell_signal = sigs[sell_active[0]].copy()
@@ -47,14 +63,8 @@ def run_backtest(
 
     positions = []
     trades    = []
-
-    # ── BUG FIX 2 ──────────────────────────────────────────────────
-    # 原代碼：cum_ret_pct += pnl_pct，然後 equity = trade_size * (1 + cum/100)
-    # 問題：算術加總百分比不等於複利。+10% 再 -10% 加總=0，但複利=−1%。
-    # 修復：改用 running_capital 做複利追蹤，每筆交易後乘以 (1 + pnl_pct/100)。
     running_capital = trade_size
     daily_equity    = []
-    # ── END FIX 2 description ─────────────────────────────────────
 
     for i in range(61, n):
         close  = close_arr[i]
@@ -98,12 +108,7 @@ def run_backtest(
                 proceeds = pos["shares"] * exit_px
                 pnl_pct  = (exit_px - ep) / ep * 100
                 pnl_hkd  = proceeds - pos["cost"]
-
-                # ── BUG FIX 2 (continued) ─────────────────────────
-                # 每筆成交後用複利更新 running_capital
                 running_capital *= (1 + pnl_pct / 100)
-                # ── END FIX 2 ─────────────────────────────────────
-
                 trades.append({
                     "買入日期": pos["entry_date"].strftime("%Y-%m-%d"),
                     "賣出日期": date.strftime("%Y-%m-%d"),
@@ -124,11 +129,7 @@ def run_backtest(
         proceeds   = pos["shares"] * last_close
         pnl_pct    = (last_close - pos["entry_px"]) / pos["entry_px"] * 100
         pnl_hkd    = proceeds - pos["cost"]
-
-        # ── BUG FIX 2 (期末) ──────────────────────────────────────
         running_capital *= (1 + pnl_pct / 100)
-        # ── END FIX 2 ─────────────────────────────────────────────
-
         trades.append({
             "買入日期": pos["entry_date"].strftime("%Y-%m-%d"),
             "賣出日期": idx_arr[-1].strftime("%Y-%m-%d") + "（持倉中）",
@@ -187,17 +188,12 @@ def calc_bt_metrics(trades, equity_df, trade_size=100_000):
         dd = (eq - roll_max) / roll_max * 100
         max_dd = float(dd.min()) if not eq.empty and roll_max.max() > 0 else 0.0
 
-    # ── BUG FIX 2 (metrics) ───────────────────────────────────────
-    # 原代碼：total_ret_equiv = avg_ret * total（算術累計，無意義）
-    # 修復：從 equity_df 直接讀取複利後的最終資金，計算真實總回報。
     if not equity_df.empty:
         final_equity  = float(equity_df["equity"].iloc[-1])
         total_ret_pct = (final_equity - trade_size) / trade_size * 100
     else:
-        # fallback：無 equity curve 時用算術近似
         final_equity  = trade_size * (1 + avg_ret / 100) ** total
         total_ret_pct = (final_equity - trade_size) / trade_size * 100
-    # ── END FIX 2 ─────────────────────────────────────────────────
 
     return {
         "平均每筆回報%":  round(avg_ret, 2),
@@ -223,6 +219,7 @@ def run_grid_search(
     trade_size: float,
     slippage: float,
     sort_metric: str = "平均每筆%",
+    market_filter_series: pd.Series = None,
 ):
     sl_grid = [0, 5, 10, 15, 20]
     tp_grid = [0, 15, 30, 50]
@@ -244,6 +241,7 @@ def run_grid_search(
             take_profit_pct=tp if tp > 0 else None,
             max_hold_days=md   if md  > 0 else None,
             _precomputed=pre_s,
+            market_filter_series=market_filter_series,
         )
         m = calc_bt_metrics(t, eq, trade_size)
         if m and m["交易次數"] >= 2:
@@ -266,3 +264,14 @@ def run_grid_search(
     df_gs = pd.DataFrame(results)
     asc   = (sort_metric == "最大回撤%")
     return df_gs.sort_values(sort_metric, ascending=asc).reset_index(drop=True)
+
+
+# ── 改進二：從 HSI DataFrame 計算恒指過濾器 Series ──────────────────
+def build_hsi_filter(hsi_df: pd.DataFrame) -> pd.Series:
+    """
+    輸入：已含 MA20 / MA60 的恒指 DataFrame
+    輸出：pd.Series[bool]，True = 恒指 MA20 > MA60（允許入場）
+    """
+    if hsi_df.empty or "MA20" not in hsi_df.columns or "MA60" not in hsi_df.columns:
+        return pd.Series(dtype=bool)
+    return (hsi_df["MA20"] > hsi_df["MA60"]).rename("hsi_bullish")
