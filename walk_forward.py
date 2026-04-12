@@ -286,8 +286,8 @@ def run_portfolio_walk_forward(
 # ══════════════════════════════════════════════════════════════════
 
 def _wf_degradation(is_ret: float, oos_ret: float) -> float:
-    if abs(is_ret) < 1e-9:
-        return 0.0
+    if abs(is_ret) < 0.5:   # 原本是 < 1e-9，改成 < 0.5
+        return 0.0           # IS不足0.5%時退化率無意義，直接顯示N/A
     return (is_ret - oos_ret) / abs(is_ret) * 100
 
 
