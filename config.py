@@ -23,7 +23,7 @@ STRATEGY_PRESETS = {
     },
     "⚡ 突破確認": {
         "desc":    "個股趨勢向上 + 突破放量，雙重確認減少假突破。\n中短線皆宜。",
-        "buy":  (True,  False, False, False, False, False, False, True,  False, False),
+        "buy":  (True,  True, False, False, False, False, False, True,  False, False),
         "sell": (True,  False, False, True,  False, False, False),
     },
     "🏗️ 底部形態完成": {
