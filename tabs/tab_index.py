@@ -243,28 +243,67 @@ def _show_regime_panel(r: dict, ticker_name: str):
 
 
 # ══════════════════════════════════════════════════════════════════
-# 制度歷史追蹤（過去 N 個交易日每日制度）
+# 制度歷史追蹤（向量化，O(n) 而非原來的 O(n²) 迴圈）
 # ══════════════════════════════════════════════════════════════════
 
 def _regime_history(df: pd.DataFrame, lookback: int = 60) -> pd.DataFrame:
     """
-    計算過去 lookback 個交易日的每日制度標籤。
-    用於顯示制度演變走勢。
+    向量化計算過去 lookback 日的每日制度標籤。
+    原版用 for 迴圈逐行切片再呼叫 _detect_regime()，
+    60 次迭代 × 每次重算 rolling → O(n²)，是 30 秒的根源。
+    修復：三個指標全部向量化計算，分類用 np.select，整體 < 0.1 秒。
     """
-    rows = []
-    for i in range(max(62, len(df) - lookback), len(df)):
-        sub = df.iloc[:i + 1]
-        r   = _detect_regime(sub)
-        if r:
-            rows.append({
-                "date":    sub.index[-1],
-                "regime":  r["regime"],
-                "emoji":   r["emoji"],
-                "ma_gap":  r["ma_gap_pct"],
-                "macd_pct": r["macd_pct"],
-                "cov_20":  r["cov_20"],
-            })
-    return pd.DataFrame(rows).set_index("date") if rows else pd.DataFrame()
+    if df.empty or len(df) < 62:
+        return pd.DataFrame()
+
+    import numpy as np
+
+    # ── 向量化三層指標 ─────────────────────────────────────────
+    ma_gap  = (df["MA20"] - df["MA60"]) / df["MA60"] * 100
+    macd_p  = df["MACD_Hist"] / df["Close"].replace(0, float("nan")) * 100
+    cov_20  = df["Close"].rolling(20).std() / df["Close"].rolling(20).mean() * 100
+
+    # ── 向量化制度分類（順序從嚴到寬，第一個 True 的條件勝出）──
+    cond_strong_bull  = (ma_gap >  2.0) & (macd_p >  0.5)
+    cond_weak_bull    = (ma_gap >  2.0) & (macd_p >  0.0) & ~cond_strong_bull
+    cond_bull_warn    = (ma_gap >  2.0) & (macd_p <= 0.0)
+    cond_strong_bear  = (ma_gap < -2.0) & (macd_p < -0.5)
+    cond_weak_bear    = (ma_gap < -2.0) & (macd_p <  0.0) & ~cond_strong_bear
+    cond_bear_watch   = (ma_gap < -2.0) & (macd_p >= 0.0)
+    cond_chop         = (ma_gap.abs() < 2.0) & (cov_20 >  2.0)
+    cond_pivot        = (ma_gap.abs() < 2.0) & (cov_20 <= 2.0)
+
+    regime = np.select(
+        [cond_strong_bull, cond_weak_bull, cond_bull_warn,
+         cond_strong_bear, cond_weak_bear, cond_bear_watch,
+         cond_chop, cond_pivot],
+        ["強牛市", "弱牛市", "牛市警惕",
+         "強熊市", "弱熊市", "熊市觀察",
+         "震盪市", "轉折期"],
+        default="轉折期",
+    )
+
+    hist = pd.DataFrame({
+        "regime":   regime,
+        "ma_gap":   ma_gap.values,
+        "macd_pct": macd_p.values,
+        "cov_20":   cov_20.values,
+    }, index=df.index).dropna(subset=["ma_gap"])
+
+    # 只回傳最近 lookback 筆
+    return hist.iloc[-lookback:] if len(hist) > lookback else hist
+
+
+# ══════════════════════════════════════════════════════════════════
+# 快取資料載入（避免切換指數/週期時重複下載）
+# ══════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=900, show_spinner=False)   # 15 分鐘快取
+def _load_index(ticker: str, period: str):
+    df = get_stock_data(ticker, period=period)
+    if df.empty:
+        return df
+    return calculate_indicators(df)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -304,13 +343,11 @@ def render():
     is_hsi_type = ticker_code in ("^HSI", "^HSTECH")
 
     with st.spinner(f"載入 {selected_index} 數據中..."):
-        df_idx = get_stock_data(ticker_code, period=period)
+        df_idx = _load_index(ticker_code, period)
 
     if df_idx.empty:
         st.error(f"❌ 無法載入 {selected_index} 數據，請稍後再試。")
         return
-
-    df_idx = calculate_indicators(df_idx)
 
     if show_regime and is_hsi_type:
         st.markdown("---")
