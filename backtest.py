@@ -17,6 +17,10 @@ def run_backtest(
     take_profit_pct: float = None,
     max_hold_days: int = None,
     _precomputed: dict = None,
+    # ── 改進二：恒指市場過濾器 ─────────────────────────────────────
+    # pd.Series[bool]，index 為交易日，True = 恒指 MA20 > MA60（牛市）
+    # None = 不啟用過濾，維持原有行為
+    market_filter_series: pd.Series = None,
 ) -> tuple:
     sigs = _precomputed if _precomputed is not None else precompute_signals(df)
 
@@ -29,6 +33,18 @@ def run_backtest(
             buy_signal &= sigs[nm]
     else:
         buy_signal = pd.Series(False, index=df.index)
+
+    # ── 改進二：把恒指過濾器疊加到 buy_signal ─────────────────────
+    # 用 reindex + ffill 對齊日期（HSI 和個股的交易日可能略有不同）
+    # 未對齊的日期 fillna(True) — 寧可放行，不誤殺
+    if market_filter_series is not None and not market_filter_series.empty:
+        hsi_aligned = (
+            market_filter_series
+            .reindex(df.index, method="ffill")
+            .fillna(True)
+        )
+        buy_signal = buy_signal & hsi_aligned
+    # ── END 改進二 ────────────────────────────────────────────────
 
     if sell_active:
         sell_signal = sigs[sell_active[0]].copy()
@@ -45,8 +61,8 @@ def run_backtest(
     idx_arr   = df.index
     n         = len(df)
 
-    positions       = []
-    trades          = []
+    positions = []
+    trades    = []
     running_capital = trade_size
     daily_equity    = []
 
@@ -107,6 +123,7 @@ def run_backtest(
         positions = keep
         daily_equity.append({"date": date, "equity": running_capital})
 
+    # 期末持倉強制平倉
     for pos in positions:
         last_close = close_arr[-1] * (1 - slippage)
         proceeds   = pos["shares"] * last_close
@@ -202,6 +219,7 @@ def run_grid_search(
     trade_size: float,
     slippage: float,
     sort_metric: str = "平均每筆%",
+    market_filter_series: pd.Series = None,
 ):
     sl_grid = [0, 5, 10, 15, 20]
     tp_grid = [0, 15, 30, 50]
@@ -210,7 +228,8 @@ def run_grid_search(
     combos  = [(sl, tp, md) for sl in sl_grid for tp in tp_grid for md in md_grid]
     total_c = len(combos)
     results = []
-    pre_s   = precompute_signals(df)
+
+    pre_s = precompute_signals(df)
 
     pbar = st.progress(0, text="網格搜索中...")
     for ci, (sl, tp, md) in enumerate(combos):
@@ -222,6 +241,7 @@ def run_grid_search(
             take_profit_pct=tp if tp > 0 else None,
             max_hold_days=md   if md  > 0 else None,
             _precomputed=pre_s,
+            market_filter_series=market_filter_series,
         )
         m = calc_bt_metrics(t, eq, trade_size)
         if m and m["交易次數"] >= 2:
@@ -244,3 +264,14 @@ def run_grid_search(
     df_gs = pd.DataFrame(results)
     asc   = (sort_metric == "最大回撤%")
     return df_gs.sort_values(sort_metric, ascending=asc).reset_index(drop=True)
+
+
+# ── 改進二：從 HSI DataFrame 計算恒指過濾器 Series ──────────────────
+def build_hsi_filter(hsi_df: pd.DataFrame) -> pd.Series:
+    """
+    輸入：已含 MA20 / MA60 的恒指 DataFrame
+    輸出：pd.Series[bool]，True = 恒指 MA20 > MA60（允許入場）
+    """
+    if hsi_df.empty or "MA20" not in hsi_df.columns or "MA60" not in hsi_df.columns:
+        return pd.Series(dtype=bool)
+    return (hsi_df["MA20"] > hsi_df["MA60"]).rename("hsi_bullish")
