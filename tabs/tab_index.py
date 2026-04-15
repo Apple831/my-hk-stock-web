@@ -280,11 +280,15 @@ def render():
         "恐慌指數 (^VIX)":    "^VIX",
     }
 
-    col1, col2 = st.columns([1, 3])
-    with col1:
+    # ── 控制列（全寬，三個控件並排）────────────────────────────
+    ctrl1, ctrl2, ctrl3 = st.columns([2, 1, 2])
+    with ctrl1:
         selected_index = st.selectbox("選擇指數", list(indices.keys()))
-        period         = st.selectbox("時間週期", ["3mo", "6mo", "1y", "2y"], index=2)
-        show_regime    = st.checkbox(
+    with ctrl2:
+        period = st.selectbox("時間週期", ["3mo", "6mo", "1y", "2y"], index=2)
+    with ctrl3:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        show_regime = st.checkbox(
             "📡 顯示市場制度偵測",
             value=True,
             help=(
@@ -295,104 +299,101 @@ def render():
             ),
         )
 
-    with col2:
-        ticker_code = indices[selected_index]
+    # ── 內容區（全寬）─────────────────────────────────────────
+    ticker_code = indices[selected_index]
+    is_hsi_type = ticker_code in ("^HSI", "^HSTECH")
 
-        # ── VIX 不做制度偵測（邏輯不適用）────────────────────
-        is_hsi_type = ticker_code in ("^HSI", "^HSTECH")
+    with st.spinner(f"載入 {selected_index} 數據中..."):
+        df_idx = get_stock_data(ticker_code, period=period)
 
-        with st.spinner(f"載入 {selected_index} 數據中..."):
-            df_idx = get_stock_data(ticker_code, period=period)
+    if df_idx.empty:
+        st.error(f"❌ 無法載入 {selected_index} 數據，請稍後再試。")
+        return
 
-        if df_idx.empty:
-            st.error(f"❌ 無法載入 {selected_index} 數據，請稍後再試。")
-            return
+    df_idx = calculate_indicators(df_idx)
 
-        df_idx = calculate_indicators(df_idx)
-
-        # ── 市場制度偵測面板 ──────────────────────────────────
-        if show_regime and is_hsi_type:
-            st.markdown("---")
-            st.markdown(f"#### 📡 {selected_index} 市場制度偵測")
-
-            regime_info = _detect_regime(df_idx)
-            _show_regime_panel(regime_info, selected_index)
-
-            # 制度歷史（可選）
-            with st.expander("🕐 近 60 日制度演變", expanded=False):
-                hist_df = _regime_history(df_idx, lookback=60)
-                if not hist_df.empty:
-                    # 用色塊顯示每日制度
-                    regime_colors = {
-                        "強牛市": "#0F6E56", "弱牛市": "#1D9E75",
-                        "牛市警惕": "#BA7517",
-                        "強熊市": "#A32D2D", "弱熊市": "#E24B4A",
-                        "熊市觀察": "#BA7517",
-                        "震盪市": "#BA7517", "轉折期": "#888780",
-                    }
-
-                    # 統計制度分布
-                    counts = hist_df["regime"].value_counts()
-                    total  = len(hist_df)
-                    st.caption(f"過去 {total} 個交易日制度分布：")
-                    cols = st.columns(min(len(counts), 4))
-                    for i, (regime, cnt) in enumerate(counts.items()):
-                        color = regime_colors.get(regime, "#888")
-                        cols[i % 4].markdown(
-                            f"<div style='border-left:3px solid {color};"
-                            f"padding:4px 8px;margin:2px 0;font-size:12px'>"
-                            f"<b>{regime}</b>：{cnt} 日 ({cnt/total*100:.0f}%)</div>",
-                            unsafe_allow_html=True,
-                        )
-
-                    # MA gap 走勢
-                    import plotly.graph_objects as go
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(
-                        x=hist_df.index, y=hist_df["ma_gap"],
-                        name="MA 差距%", fill="tozeroy",
-                        line=dict(width=1.5, color="#1D9E75"),
-                        fillcolor="rgba(29,158,117,0.12)",
-                    ))
-                    fig.add_hline(y=2,  line_dash="dot", line_color="rgba(29,158,117,0.5)",
-                                  annotation_text="+2% 牛市線", annotation_position="right")
-                    fig.add_hline(y=-2, line_dash="dot", line_color="rgba(226,74,74,0.5)",
-                                  annotation_text="-2% 熊市線", annotation_position="right")
-                    fig.add_hline(y=0,  line_dash="dash", line_color="rgba(128,128,128,0.3)")
-                    fig.update_layout(
-                        height=200, margin=dict(t=10, b=10),
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        plot_bgcolor="rgba(0,0,0,0)",
-                        yaxis_ticksuffix="%", showlegend=False,
-                        yaxis_title="MA20-MA60 差距%",
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-
-                    # MACD% 走勢
-                    fig2 = go.Figure()
-                    colors_bar = ["#1D9E75" if v >= 0 else "#E24B4A" for v in hist_df["macd_pct"]]
-                    fig2.add_trace(go.Bar(
-                        x=hist_df.index, y=hist_df["macd_pct"],
-                        name="MACD%", marker_color=colors_bar,
-                    ))
-                    fig2.add_hline(y=0.5,  line_dash="dot", line_color="rgba(29,158,117,0.5)",
-                                   annotation_text="+0.5% 強牛", annotation_position="right")
-                    fig2.add_hline(y=-0.5, line_dash="dot", line_color="rgba(226,74,74,0.5)",
-                                   annotation_text="-0.5% 強熊", annotation_position="right")
-                    fig2.update_layout(
-                        height=180, margin=dict(t=10, b=10),
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        plot_bgcolor="rgba(0,0,0,0)",
-                        yaxis_ticksuffix="%", showlegend=False,
-                        yaxis_title="正規化 MACD%",
-                    )
-                    st.plotly_chart(fig2, use_container_width=True)
-                else:
-                    st.info("數據不足以計算制度歷史。")
-
-        elif show_regime and not is_hsi_type:
-            st.caption("⚠️ VIX 不適用市場制度偵測（邏輯針對股票指數設計）。")
-
+    if show_regime and is_hsi_type:
         st.markdown("---")
-        st.markdown(f"### 📈 {selected_index} 技術圖表")
-        show_chart(ticker_code, df_idx)
+        st.markdown(f"#### 📡 {selected_index} 市場制度偵測")
+
+        regime_info = _detect_regime(df_idx)
+        _show_regime_panel(regime_info, selected_index)
+
+        # 制度歷史（可選）
+        with st.expander("🕐 近 60 日制度演變", expanded=False):
+            hist_df = _regime_history(df_idx, lookback=60)
+            if not hist_df.empty:
+                # 用色塊顯示每日制度
+                regime_colors = {
+                    "強牛市": "#0F6E56", "弱牛市": "#1D9E75",
+                    "牛市警惕": "#BA7517",
+                    "強熊市": "#A32D2D", "弱熊市": "#E24B4A",
+                    "熊市觀察": "#BA7517",
+                    "震盪市": "#BA7517", "轉折期": "#888780",
+                }
+
+                # 統計制度分布
+                counts = hist_df["regime"].value_counts()
+                total  = len(hist_df)
+                st.caption(f"過去 {total} 個交易日制度分布：")
+                cols = st.columns(min(len(counts), 4))
+                for i, (regime, cnt) in enumerate(counts.items()):
+                    color = regime_colors.get(regime, "#888")
+                    cols[i % 4].markdown(
+                        f"<div style='border-left:3px solid {color};"
+                        f"padding:4px 8px;margin:2px 0;font-size:12px'>"
+                        f"<b>{regime}</b>：{cnt} 日 ({cnt/total*100:.0f}%)</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                # MA gap 走勢
+                import plotly.graph_objects as go
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=hist_df.index, y=hist_df["ma_gap"],
+                    name="MA 差距%", fill="tozeroy",
+                    line=dict(width=1.5, color="#1D9E75"),
+                    fillcolor="rgba(29,158,117,0.12)",
+                ))
+                fig.add_hline(y=2,  line_dash="dot", line_color="rgba(29,158,117,0.5)",
+                              annotation_text="+2% 牛市線", annotation_position="right")
+                fig.add_hline(y=-2, line_dash="dot", line_color="rgba(226,74,74,0.5)",
+                              annotation_text="-2% 熊市線", annotation_position="right")
+                fig.add_hline(y=0,  line_dash="dash", line_color="rgba(128,128,128,0.3)")
+                fig.update_layout(
+                    height=200, margin=dict(t=10, b=10),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    yaxis_ticksuffix="%", showlegend=False,
+                    yaxis_title="MA20-MA60 差距%",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                # MACD% 走勢
+                fig2 = go.Figure()
+                colors_bar = ["#1D9E75" if v >= 0 else "#E24B4A" for v in hist_df["macd_pct"]]
+                fig2.add_trace(go.Bar(
+                    x=hist_df.index, y=hist_df["macd_pct"],
+                    name="MACD%", marker_color=colors_bar,
+                ))
+                fig2.add_hline(y=0.5,  line_dash="dot", line_color="rgba(29,158,117,0.5)",
+                               annotation_text="+0.5% 強牛", annotation_position="right")
+                fig2.add_hline(y=-0.5, line_dash="dot", line_color="rgba(226,74,74,0.5)",
+                               annotation_text="-0.5% 強熊", annotation_position="right")
+                fig2.update_layout(
+                    height=180, margin=dict(t=10, b=10),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    yaxis_ticksuffix="%", showlegend=False,
+                    yaxis_title="正規化 MACD%",
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+            else:
+                st.info("數據不足以計算制度歷史。")
+
+    elif show_regime and not is_hsi_type:
+        st.caption("⚠️ VIX 不適用市場制度偵測（邏輯針對股票指數設計）。")
+
+    st.markdown("---")
+    st.markdown(f"### 📈 {selected_index} 技術圖表")
+    show_chart(ticker_code, df_idx)
