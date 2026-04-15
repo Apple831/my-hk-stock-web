@@ -302,8 +302,19 @@ def _regime_history(df: pd.DataFrame, lookback: int = 60) -> pd.DataFrame:
 def _load_index(ticker: str, period: str):
     df = get_stock_data(ticker, period=period)
     if df.empty:
+        # 不快取失敗結果，讓用戶重試時能重新下載
         return df
     return calculate_indicators(df)
+
+
+# yfinance 偶爾對特定 ticker 回傳空資料，
+# 在 render() 裏用此 wrapper 清除快取後重試一次
+def _load_index_with_retry(ticker: str, period: str):
+    df = _load_index(ticker, period)
+    if df.empty:
+        # 清除此 ticker 的快取，下次才能真正重試
+        _load_index.clear()
+    return df
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -343,7 +354,7 @@ def render():
     is_hsi_type = ticker_code in ("^HSI", "^HSTECH")
 
     with st.spinner(f"載入 {selected_index} 數據中..."):
-        df_idx = _load_index(ticker_code, period)
+        df_idx = _load_index_with_retry(ticker_code, period)
 
     if df_idx.empty:
         st.error(f"❌ 無法載入 {selected_index} 數據，請稍後再試。")
