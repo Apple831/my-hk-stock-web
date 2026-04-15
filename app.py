@@ -5,7 +5,7 @@
 import streamlit as st
 from datetime import datetime
 
-st.set_page_config(page_title="港股狙擊手 V12.0", layout="wide")
+st.set_page_config(page_title="港股狙擊手 V11.1", layout="wide")
 
 from data import (
     load_stocks, load_stocks_from_file,
@@ -57,14 +57,25 @@ with st.sidebar:
         if not stocks_dl:
             st.warning("請先載入股票清單")
         else:
-            batch_size = 20
+            import time
+            batch_size = 10           # 從 20 減到 10，降低每批請求密度
             all_cache  = {}
             batches = [stocks_dl[i:i+batch_size] for i in range(0, len(stocks_dl), batch_size)]
-            prog = st.progress(0, text="準備下載...")
+            prog   = st.progress(0, text="準備下載...")
+            status = st.empty()
+            failed = 0
             for bi, batch in enumerate(batches):
-                prog.progress((bi+1)/len(batches), text=f"下載第 {bi+1}/{len(batches)} 批...")
-                all_cache.update(batch_download(batch, period=cache_period))
+                prog.progress(
+                    (bi + 1) / len(batches),
+                    text=f"下載第 {bi+1}/{len(batches)} 批（共 {len(stocks_dl)} 隻）...",
+                )
+                result = batch_download(batch, period=cache_period)
+                all_cache.update(result)
+                # 每批之間暫停 1.5 秒，避免 Yahoo Finance 限速封鎖
+                if bi < len(batches) - 1:
+                    time.sleep(1.5)
             prog.empty()
+            status.empty()
             st.session_state["stock_cache"]    = all_cache
             st.session_state["cache_time"]     = datetime.now().strftime("%H:%M")
             st.session_state["cache_datetime"] = datetime.now()
@@ -81,7 +92,7 @@ with st.sidebar:
 # Main UI — Tab routing
 # ══════════════════════════════════════════════════════════════════
 STOCKS = load_stocks()
-st.title("🏹 港股狙擊手 V12.0")
+st.title("🏹 港股狙擊手 V11.1")
 
 tabs = st.tabs([
     "🌍 指數", "🏆 跑贏大市", "🟢 買入掃描", "🔴 賣出掃描",
