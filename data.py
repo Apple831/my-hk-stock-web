@@ -143,17 +143,20 @@ def batch_download(tickers: list, period: str = "1y") -> dict:
 def fetch_stocks_from_tradingview(
     min_cap_hkd: int = 10_000_000_000,
     min_vol_hkd: int = 50_000_000,
+    min_price_hkd: float = 5.0,
+    min_roe_pct: float = 8.0,
 ) -> list:
     payload = {
-        "filter": [
-            {"left": "market_cap_basic",             "operation": "greater", "right": min_cap_hkd / 7.8},
-            {"left": "earnings_per_share_basic_ttm", "operation": "greater", "right": 0},
-            {"left": "average_volume_30d_calc",      "operation": "greater", "right": min_vol_hkd / 7.8},
-        ],
-        "markets": ["hongkong"],
-        "symbols": {"query": {"types": ["stock"]}, "tickers": []},
-        "columns": ["name", "description", "close", "market_cap_basic",
-                     "earnings_per_share_basic_ttm", "average_volume_30d_calc"],
+"filter": [
+    {"left": "market_cap_basic",             "operation": "greater", "right": min_cap_hkd / 7.8},
+    {"left": "earnings_per_share_basic_ttm", "operation": "greater", "right": 0},
+    {"left": "average_volume_30d_calc",      "operation": "greater", "right": min_vol_hkd / 7.8},
+    {"left": "close",                        "operation": "greater", "right": min_price_hkd},
+    {"left": "return_on_equity",             "operation": "greater", "right": min_roe_pct},
+],
+"columns": ["name", "description", "close", "market_cap_basic",
+             "earnings_per_share_basic_ttm", "average_volume_30d_calc",
+             "return_on_equity"],
         "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
         "range": [0, 1000],
     }
