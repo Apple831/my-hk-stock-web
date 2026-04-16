@@ -42,7 +42,6 @@ with st.sidebar:
                    min_cap_hkd=_cap,
                    min_vol_hkd=_vol,
                    min_price_hkd=_price_map[tv_min_price],
-                   min_roe_pct=float(tv_min_roe),
                 )
                 if new:
                     st.session_state["stocks"] = new
