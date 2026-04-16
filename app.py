@@ -28,6 +28,10 @@ with st.sidebar:
 
     tv_min_cap = st.selectbox("最低市值", ["50億","100億","500億"], index=1, key="tv_min_cap")
     tv_min_vol = st.selectbox("日均成交額下限", ["3000萬","5000萬","1億"], index=1, key="tv_min_vol")
+    tv_min_price = st.selectbox("最低股價 (HKD)", ["2元", "5元", "10元"], index=1, key="tv_min_price")
+    tv_min_roe   = st.number_input("最低 ROE (%)", value=7.0, min_value=0.0,max_value=50.0, step=1.0, key="tv_min_roe")
+
+    _price_map = {"2元": 2.0, "5元": 5.0, "10元": 10.0}
     _cap_map = {"50億":5_000_000_000, "100億":10_000_000_000, "500億":50_000_000_000}
     _vol_map = {"3000萬":30_000_000, "5000萬":50_000_000, "1億":100_000_000}
 
@@ -35,7 +39,12 @@ with st.sidebar:
         _cap, _vol = _cap_map[tv_min_cap], _vol_map[tv_min_vol]
         with st.spinner(f"篩選中..."):
             try:
-                new = fetch_stocks_from_tradingview(min_cap_hkd=_cap, min_vol_hkd=_vol)
+                new = fetch_stocks_from_tradingview(
+                   min_cap_hkd=_cap,
+                   min_vol_hkd=_vol,
+                   min_price_hkd=_price_map[tv_min_price],
+                   min_roe_pct=float(tv_min_roe),
+                )
                 if new:
                     st.session_state["stocks"] = new
                     st.session_state.pop("stock_cache", None)
