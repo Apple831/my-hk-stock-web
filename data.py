@@ -152,7 +152,6 @@ def fetch_stocks_from_tradingview(
     {"left": "earnings_per_share_basic_ttm", "operation": "greater", "right": 0},
     {"left": "average_volume_30d_calc",      "operation": "greater", "right": min_vol_hkd / 7.8},
     {"left": "close",                        "operation": "greater", "right": 5.0},
-    {"left": "return_on_equity",             "operation": "greater", "right": 7.0},
 ],
 "columns": ["name", "description", "close", "market_cap_basic",
              "earnings_per_share_basic_ttm", "average_volume_30d_calc",
