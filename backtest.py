@@ -72,7 +72,7 @@ def run_backtest(
         high_i = high_arr[i]
         date   = idx_arr[i]
 
-        if buy_arr[i] and i + 1 < n - 1:
+        if buy_arr[i] and i + 2 < n - 1:
             entry_px   = close_arr[i + 1] * (1 + slippage)
             entry_date = idx_arr[i + 1]
             entry_idx  = i + 1
