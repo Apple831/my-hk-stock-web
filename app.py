@@ -29,7 +29,6 @@ with st.sidebar:
     tv_min_cap = st.selectbox("最低市值", ["50億","100億","500億"], index=1, key="tv_min_cap")
     tv_min_vol = st.selectbox("日均成交額下限", ["3000萬","5000萬","1億"], index=1, key="tv_min_vol")
     tv_min_price = st.selectbox("最低股價 (HKD)", ["2元", "5元", "10元"], index=1, key="tv_min_price")
-    tv_min_roe   = st.number_input("最低 ROE (%)", value=7.0, min_value=0.0,max_value=50.0, step=1.0, key="tv_min_roe")
 
     _price_map = {"2元": 2.0, "5元": 5.0, "10元": 10.0}
     _cap_map = {"50億":5_000_000_000, "100億":10_000_000_000, "500億":50_000_000_000}
