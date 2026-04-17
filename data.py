@@ -3,6 +3,7 @@
 # ══════════════════════════════════════════════════════════════════
 
 import os
+import time
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -66,7 +67,12 @@ def filter_anomalies(df: pd.DataFrame) -> pd.DataFrame:
     return df[~bad].copy()
 
 
-# ── 單股下載 ────────────────────────────────────────────────────────
+# ── 單股下載（加 10 分鐘快取，避免同一 ticker 重複下載）────────────
+# ttl=600：10 分鐘內再次請求同一 (ticker, period) 直接返回快取結果
+# 適用場景：分析 Tab、掃描 Tab 在同一 session 多次呼叫同一股票
+# 注意：手動「清除緩存」只清 session_state["stock_cache"]，
+#       st.cache_data 的快取由 Streamlit 獨立管理，需重啟才清除。
+@st.cache_data(ttl=600, show_spinner=False)
 def get_stock_data(ticker: str, period: str = "1y") -> pd.DataFrame:
     try:
         if ticker == "^HSTECH":
@@ -96,46 +102,57 @@ def get_stock_data(ticker: str, period: str = "1y") -> pd.DataFrame:
 # ── 批量下載 ────────────────────────────────────────────────────────
 def batch_download(tickers: list, period: str = "1y") -> dict:
     cache = {}
-    try:
-        raw = yf.download(
-            tickers, period=period,
-            progress=False, auto_adjust=True,
-            group_by="ticker", threads=True,
-        )
-    except Exception:
-        return cache
+    batch_size = 10  # 每批 10 隻，減少 Yahoo Finance 限速風險
 
-    if raw.empty:
-        return cache
-
-    if isinstance(raw.columns, pd.MultiIndex):
-        lvl0 = raw.columns.get_level_values(0).unique().tolist()
-        ohlcv = {"Open", "High", "Low", "Close", "Volume"}
-        ticker_level = 1 if set(lvl0) & ohlcv else 0
-    else:
-        ticker_level = None
-
-    for ticker in tickers:
+    for batch_start in range(0, len(tickers), batch_size):
+        batch = tickers[batch_start : batch_start + batch_size]
         try:
-            if ticker_level is None:
-                df = raw.copy()
-            elif ticker_level == 1:
-                if ticker not in raw.columns.get_level_values(1):
-                    continue
-                df = raw.xs(ticker, axis=1, level=1).copy()
-            else:
-                if ticker not in raw.columns.get_level_values(0):
-                    continue
-                df = raw.xs(ticker, axis=1, level=0).copy()
-
-            df = flatten_columns(df)
-            df = normalize_index(df)
-            df = df.dropna(subset=["Close"])
-            if len(df) < 60:
-                continue
-            cache[ticker] = calculate_indicators(df)
+            raw = yf.download(
+                batch, period=period,
+                progress=False, auto_adjust=True,
+                group_by="ticker", threads=True,
+            )
         except Exception:
+            time.sleep(1.5)
             continue
+
+        if raw.empty:
+            time.sleep(1.5)
+            continue
+
+        if isinstance(raw.columns, pd.MultiIndex):
+            lvl0 = raw.columns.get_level_values(0).unique().tolist()
+            ohlcv = {"Open", "High", "Low", "Close", "Volume"}
+            ticker_level = 1 if set(lvl0) & ohlcv else 0
+        else:
+            ticker_level = None
+
+        for ticker in batch:
+            try:
+                if ticker_level is None:
+                    df = raw.copy()
+                elif ticker_level == 1:
+                    if ticker not in raw.columns.get_level_values(1):
+                        continue
+                    df = raw.xs(ticker, axis=1, level=1).copy()
+                else:
+                    if ticker not in raw.columns.get_level_values(0):
+                        continue
+                    df = raw.xs(ticker, axis=1, level=0).copy()
+
+                df = flatten_columns(df)
+                df = normalize_index(df)
+                df = df.dropna(subset=["Close"])
+                if len(df) < 60:
+                    continue
+                cache[ticker] = calculate_indicators(df)
+            except Exception:
+                continue
+
+        # 批次之間稍作等待，避免 Yahoo Finance 限速
+        if batch_start + batch_size < len(tickers):
+            time.sleep(1.5)
+
     return cache
 
 
