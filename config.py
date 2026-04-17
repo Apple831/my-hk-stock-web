@@ -76,6 +76,20 @@ STRATEGY_PRESETS = {
         "sell": (True,  False, False, True,  False, False, False),
         #        s1     s2     s3     s4     s5     s6     s7
     },
+
+    # ── 8. 底部背離確認 b4 + b7 + b3 ─────────────────────────────
+    # 在 WF 唯一通過策略（b4+b7）基礎上，增加底背離（b3）作為第三重確認。
+    # 目標：提升入場品質，濾掉無背離支撐的底部假突破。
+    # 代價：信號頻率大幅下降（b3 本身已很罕見）。
+    # ⚠️ 建議用「投資組合模式」跑 WF，單股信號太少會導致 Fold 無效。
+    "🔍 底部背離確認（b4+b7+b3）": {
+        "desc": "底部突破MA20 + MACD金叉 + 底背離三重確認，在b4+b7基礎上加b3過濾，入場品質更高但信號更少。\n⚠️ 建議用投資組合WF模式驗證（單股信號太少）。",
+        "buy":  (False, False, True,  True,  False, False, True,  False, False, False),
+        #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
+        "sell": (True,  False, False, False, False, True,  False),
+        #        s1     s2     s3     s4     s5     s6     s7
+    },
+
 }
 
 PRESET_NAMES  = ["✏️ 自定義"] + list(STRATEGY_PRESETS.keys())
