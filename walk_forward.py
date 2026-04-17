@@ -300,7 +300,7 @@ def run_portfolio_walk_forward(
 def _wf_degradation(is_ret: float, oos_ret: float) -> float:
     # 改進二附帶修復：IS 不足 0.5% 時公式失效（分母趨近 0 → 爆炸）
     # 返回 None，UI 顯示 "N/A" 而非天文數字
-    if abs(is_ret) < 1.0:
+    if abs(is_ret) < 0.5:
         return None
     return (is_ret - oos_ret) / abs(is_ret) * 100
 
