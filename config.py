@@ -77,6 +77,29 @@ STRATEGY_PRESETS = {
     },
 
 
+    # ── 8. 均值回歸 + MACD死叉出場 b5+b6 / s6 ───────────────────
+    # WF 驗證通過（投資組合模式）
+    # 相比均值回歸（s2+s5），改用 MACD死叉出場，持倉更長，捕捉更完整波段
+    "🔄 均值回歸長持（mean reversion long）": {
+        "desc": "布林下軌+RSI超賣買入，MACD死叉出場。比s2+s5版本持倉更長，適合捕捉完整反彈波段。",
+        "buy":  (False, False, False, False, True,  True,  False, False, False, False),
+        #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
+        "sell": (False, False, False, False, False, True,  False),
+        #        s1     s2     s3     s4     s5     s6     s7
+    },
+
+    # ── 9. 底部形態完成 + 超買出場 b4+b7 / s2+s5 ─────────────────
+    # WF 驗證通過（投資組合模式）
+    # 原版 b4+b7 改賣出條件：原 s1+s6（結構出）→ s2+s5（超買出）
+    # 讓反彈走到真正超買才離場，捕捉更完整的底部反彈波段
+    "🏗️+ 底部形態超買出（bottom+overbought exit）": {
+        "desc": "底部突破MA20+MACD金叉買入，布林上軌+RSI超買出場。在b4+b7基礎上改賣出條件，讓反彈走得更完整。",
+        "buy":  (False, False, False, True,  False, False, True,  False, False, False),
+        #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
+        "sell": (False, True,  False, False, True,  False, False),
+        #        s1     s2     s3     s4     s5     s6     s7
+    },
+
 }
 
 PRESET_NAMES  = ["✏️ 自定義"] + list(STRATEGY_PRESETS.keys())
