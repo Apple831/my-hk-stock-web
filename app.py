@@ -17,6 +17,7 @@ from tabs import (
     tab_sell_scan, tab_analysis, tab_backtest,
     tab_walkforward,
 )
+from tabs import tab_regime_matrix
 
 # ══════════════════════════════════════════════════════════════════
 # Sidebar
@@ -26,22 +27,22 @@ with st.sidebar:
     n_stocks = len(st.session_state.get("stocks", []))
     st.caption(f"股票清單：{n_stocks or '讀取中'} 隻")
 
-    tv_min_cap = st.selectbox("最低市值", ["50億","100億","500億"], index=1, key="tv_min_cap")
-    tv_min_vol = st.selectbox("日均成交額下限", ["3000萬","5000萬","1億"], index=1, key="tv_min_vol")
+    tv_min_cap   = st.selectbox("最低市值", ["50億","100億","500億"], index=1, key="tv_min_cap")
+    tv_min_vol   = st.selectbox("日均成交額下限", ["3000萬","5000萬","1億"], index=1, key="tv_min_vol")
     tv_min_price = st.selectbox("最低股價 (HKD)", ["2元", "5元", "10元"], index=1, key="tv_min_price")
 
     _price_map = {"2元": 2.0, "5元": 5.0, "10元": 10.0}
-    _cap_map = {"50億":5_000_000_000, "100億":10_000_000_000, "500億":50_000_000_000}
-    _vol_map = {"3000萬":30_000_000, "5000萬":50_000_000, "1億":100_000_000}
+    _cap_map   = {"50億":5_000_000_000, "100億":10_000_000_000, "500億":50_000_000_000}
+    _vol_map   = {"3000萬":30_000_000, "5000萬":50_000_000, "1億":100_000_000}
 
     if st.button("🔄 更新清單 (TradingView)"):
         _cap, _vol = _cap_map[tv_min_cap], _vol_map[tv_min_vol]
-        with st.spinner(f"篩選中..."):
+        with st.spinner("篩選中..."):
             try:
                 new = fetch_stocks_from_tradingview(
-                   min_cap_hkd=_cap,
-                   min_vol_hkd=_vol,
-                   min_price_hkd=_price_map[tv_min_price],
+                    min_cap_hkd=_cap,
+                    min_vol_hkd=_vol,
+                    min_price_hkd=_price_map[tv_min_price],
                 )
                 if new:
                     st.session_state["stocks"] = new
@@ -66,8 +67,8 @@ with st.sidebar:
         else:
             batch_size = 10
             all_cache  = {}
-            batches = [stocks_dl[i:i+batch_size] for i in range(0, len(stocks_dl), batch_size)]
-            prog = st.progress(0, text="準備下載...")
+            batches    = [stocks_dl[i:i+batch_size] for i in range(0, len(stocks_dl), batch_size)]
+            prog       = st.progress(0, text="準備下載...")
             for bi, batch in enumerate(batches):
                 prog.progress((bi+1)/len(batches), text=f"下載第 {bi+1}/{len(batches)} 批...")
                 all_cache.update(batch_download(batch, period=cache_period))
@@ -92,7 +93,7 @@ st.title("🏹 港股狙擊手 V12.0")
 
 tabs = st.tabs([
     "🌍 指數", "🏆 跑贏大市", "🟢 買入掃描", "🔴 賣出掃描",
-    "🔍 分析", "📊 回測", "🔬 Walk-Forward",
+    "🔍 分析", "📊 回測", "🔬 Walk-Forward", "🗺️ 制度矩陣",
 ])
 
 with tabs[0]:
@@ -109,3 +110,5 @@ with tabs[5]:
     tab_backtest.render(STOCKS)
 with tabs[6]:
     tab_walkforward.render(STOCKS)
+with tabs[7]:
+    tab_regime_matrix.render(STOCKS)
