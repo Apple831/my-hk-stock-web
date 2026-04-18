@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════
-# app.py — 港股狙擊手 V11.0  主入口
+# app.py — 港股狙擊手 V12.0  主入口
 # ══════════════════════════════════════════════════════════════════
 
 import streamlit as st
@@ -15,7 +15,7 @@ from data import (
 from tabs import (
     tab_index, tab_beat, tab_buy_scan,
     tab_sell_scan, tab_analysis, tab_backtest,
-    tab_walkforward, tab_diagnosis,
+    tab_walkforward,
 )
 
 # ══════════════════════════════════════════════════════════════════
@@ -64,7 +64,7 @@ with st.sidebar:
         if not stocks_dl:
             st.warning("請先載入股票清單")
         else:
-            batch_size = 20
+            batch_size = 10
             all_cache  = {}
             batches = [stocks_dl[i:i+batch_size] for i in range(0, len(stocks_dl), batch_size)]
             prog = st.progress(0, text="準備下載...")
@@ -92,7 +92,7 @@ st.title("🏹 港股狙擊手 V12.0")
 
 tabs = st.tabs([
     "🌍 指數", "🏆 跑贏大市", "🟢 買入掃描", "🔴 賣出掃描",
-    "🔍 分析", "📊 回測", "🔬 Walk-Forward", "📡 訊號診斷",
+    "🔍 分析", "📊 回測", "🔬 Walk-Forward",
 ])
 
 with tabs[0]:
@@ -108,8 +108,4 @@ with tabs[4]:
 with tabs[5]:
     tab_backtest.render(STOCKS)
 with tabs[6]:
-    # FIX: tab_walkforward.render() → render(STOCKS)
-    # 新版 tab_walkforward 加入了投資組合模式，需要 stocks 清單
     tab_walkforward.render(STOCKS)
-with tabs[7]:
-    tab_diagnosis.render(STOCKS)
