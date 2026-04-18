@@ -44,9 +44,9 @@ STRATEGY_PRESETS = {
     },
 
     # ── 5. 底部形態完成（原版）b4 + b7 ───────────────────────────
-    # ✅ 唯一通過 Walk-Forward 驗證的策略（OOS +2.36%，退化率 22%）
+    # ✅ 通過 Walk-Forward 驗證（OOS +2.36%，退化率 22%）
     "🏗️ 底部形態完成（bottom）": {
-        "desc": "底部突破MA20 + MACD金叉，WF驗證唯一通過策略（OOS +2.36%，退化率22%）。",
+        "desc": "底部突破MA20 + MACD金叉，WF驗證通過策略（OOS +2.36%，退化率22%）。",
         "buy":  (False, False, False, True,  False, False, True,  False, False, False),
         #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
         "sell": (True,  False, False, False, False, True,  False),
@@ -54,11 +54,8 @@ STRATEGY_PRESETS = {
     },
 
     # ── 6. 超賣反彈 b6 + b7 ──────────────────────────────────────
-    # ⚠️ b6（RSI<30）有 hsi_bullish gate，熊市自動停用。
-    # 熊市時退化為單條件 b7（MACD金叉），信號頻率大幅上升但質量下降。
-    # 最適合牛市中的短暫超賣回調，不適合系統性下跌行情。
     "📉 超賣反彈（oversold bounce）": {
-        "desc": "RSI超賣（<30）+ MACD金叉，極端超賣時反彈進場。\n注：RSI條件在熊市自動停用（僅剩MACD金叉），牛市震盪時效果最好。",
+        "desc": "RSI超賣（<30）+ MACD金叉，極端超賣時反彈進場。",
         "buy":  (False, False, False, False, False, True,  True,  False, False, False),
         #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
         "sell": (False, True,  False, False, True,  False, False),
@@ -66,9 +63,6 @@ STRATEGY_PRESETS = {
     },
 
     # ── 7. 量化確認 b1 + b2 + b8 ─────────────────────────────────
-    # 三層動能確認：放量突破（短線）+ MA5金叉（短線確認）+ MA20>MA60（中線趨勢）
-    # 無信號衝突，無 gate 問題，邏輯完全一致。
-    # 信號頻率較低，但每個信號都有三重確認，品質較高。
     "📊 量化確認（quant confirm）": {
         "desc": "突破放量 + MA5金叉 + 趨勢確認（MA20>MA60）三重確認，信號少但品質高。",
         "buy":  (True,  True,  False, False, False, False, False, True,  False, False),
@@ -77,10 +71,21 @@ STRATEGY_PRESETS = {
         #        s1     s2     s3     s4     s5     s6     s7
     },
 
-    # ── 8. 底部背離確認 b4 + b7 + b3 ─────────────────────────────
-    # 在 WF 唯一通過策略（b4+b7）基礎上，增加底背離（b3）作為第三重確認。
-    # 目標：提升入場品質，濾掉無背離支撐的底部假突破。
-    # 代價：信號頻率大幅下降（b3 本身已很罕見）。
+    # ── 8. 均值回歸 b5 + b6，賣出 s2 + s5 ────────────────────────
+    # ✅ WF 驗證：8/8 制度正回報，全天候策略
+    # 入場：布林下軌（b5）OR RSI<30（b6），任一觸發即入場
+    # 出場：布林上軌（s2）OR RSI>70（s5），超買即離場
+    # 特性：均值回歸，熊市高波動效果最好（弱熊+8%/228筆，強熊+12.5%/204筆）
+    # 注意：b5/b6 gate 已移除（indicators.py），行為與 WF 結果一致
+    "📈 均值回歸（mean reversion）": {
+        "desc": "布林下軌+RSI超賣買入，布林上軌+RSI超買賣出。WF驗證8/8制度正回報，全天候策略。",
+        "buy":  (False, False, False, False, True,  True,  False, False, False, False),
+        #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
+        "sell": (False, True,  False, False, True,  False, False),
+        #        s1     s2     s3     s4     s5     s6     s7
+    },
+
+    # ── 9. 底部背離確認 b4 + b7 + b3 ─────────────────────────────
     # ⚠️ 建議用「投資組合模式」跑 WF，單股信號太少會導致 Fold 無效。
     "🔍 底部背離確認（b4+b7+b3）": {
         "desc": "底部突破MA20 + MACD金叉 + 底背離三重確認，在b4+b7基礎上加b3過濾，入場品質更高但信號更少。\n⚠️ 建議用投資組合WF模式驗證（單股信號太少）。",
