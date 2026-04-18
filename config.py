@@ -25,16 +25,7 @@ STRATEGY_PRESETS = {
         #        s1     s2     s3     s4     s5     s6     s7
     },
 
-    # ── 3. 底部背離反轉（原版）b3 + b7 ───────────────────────────
-    "💎 底部背離反轉（divergence）": {
-        "desc": "底背離（價創新低但MACD未跟）+ MACD金叉，熊市末期最有效，信號少但可靠。",
-        "buy":  (False, False, True,  False, False, False, True,  False, False, False),
-        #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
-        "sell": (False, False, False, False, False, True,  True),
-        #        s1     s2     s3     s4     s5     s6     s7
-    },
-
-    # ── 4. 突破確認（原版）b1 + b8 ───────────────────────────────
+    # ── 3. 突破確認（原版）b1 + b8 ───────────────────────────────
     "⚡ 突破確認（breakout）": {
         "desc": "突破放量 + 趨勢確認（MA20>MA60），確保突破發生在上升趨勢中，減少假突破。",
         "buy":  (True,  False, False, False, False, False, False, True,  False, False),
@@ -85,15 +76,6 @@ STRATEGY_PRESETS = {
         #        s1     s2     s3     s4     s5     s6     s7
     },
 
-    # ── 9. 底部背離確認 b4 + b7 + b3 ─────────────────────────────
-    # ⚠️ 建議用「投資組合模式」跑 WF，單股信號太少會導致 Fold 無效。
-    "🔍 底部背離確認（b4+b7+b3）": {
-        "desc": "底部突破MA20 + MACD金叉 + 底背離三重確認，在b4+b7基礎上加b3過濾，入場品質更高但信號更少。\n⚠️ 建議用投資組合WF模式驗證（單股信號太少）。",
-        "buy":  (False, False, True,  True,  False, False, True,  False, False, False),
-        #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
-        "sell": (True,  False, False, False, False, True,  False),
-        #        s1     s2     s3     s4     s5     s6     s7
-    },
 
 }
 
