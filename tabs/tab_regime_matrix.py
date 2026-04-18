@@ -1,0 +1,293 @@
+# tabs/tab_regime_matrix.py
+# ══════════════════════════════════════════════════════════════════
+# 制度 × 策略矩陣：對所有預設策略跑 Portfolio WF，
+# 按每筆交易的「入場時市場制度」分類，找出哪個策略在哪個制度最好。
+# ══════════════════════════════════════════════════════════════════
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+
+from data import get_stock_data
+from indicators import calculate_indicators
+from walk_forward import run_portfolio_walk_forward
+from config import STRATEGY_PRESETS
+
+# ── 制度定義（與 tab_index.py 保持一致）──────────────────────────
+REGIMES_ORDER = [
+    "強牛市", "弱牛市", "牛市警惕",
+    "熊市觀察", "弱熊市", "強熊市",
+    "震盪市", "轉折期",
+]
+REGIME_EMOJI = {
+    "強牛市": "🟢🟢", "弱牛市": "🟢",   "牛市警惕": "🟢⚠️",
+    "熊市觀察": "🔴⚠️", "弱熊市": "🔴", "強熊市":  "🔴🔴",
+    "震盪市": "🟡",    "轉折期": "🟡⚠️",
+}
+
+
+# ── 向量化計算 HSI 每日制度標籤 ──────────────────────────────────
+def _calc_daily_regimes(hsi_df: pd.DataFrame) -> pd.Series:
+    if hsi_df.empty or len(hsi_df) < 62:
+        return pd.Series(dtype=str)
+
+    ma_gap = (hsi_df["MA20"] - hsi_df["MA60"]) / hsi_df["MA60"] * 100
+    macd_p = hsi_df["MACD_Hist"] / hsi_df["Close"].replace(0, float("nan")) * 100
+    cov_20 = (hsi_df["Close"].rolling(20).std() /
+              hsi_df["Close"].rolling(20).mean() * 100)
+
+    regime = np.select(
+        [
+            (ma_gap >  2.0) & (macd_p >  0.5),
+            (ma_gap >  2.0) & (macd_p >  0.0) & ~((ma_gap >  2.0) & (macd_p >  0.5)),
+            (ma_gap >  2.0) & (macd_p <= 0.0),
+            (ma_gap < -2.0) & (macd_p < -0.5),
+            (ma_gap < -2.0) & (macd_p <  0.0) & ~((ma_gap < -2.0) & (macd_p < -0.5)),
+            (ma_gap < -2.0) & (macd_p >= 0.0),
+            (ma_gap.abs() < 2.0) & (cov_20 >  2.0),
+            (ma_gap.abs() < 2.0) & (cov_20 <= 2.0),
+        ],
+        ["強牛市", "弱牛市", "牛市警惕",
+         "強熊市", "弱熊市", "熊市觀察",
+         "震盪市", "轉折期"],
+        default="轉折期",
+    )
+    return pd.Series(regime, index=hsi_df.index, name="regime")
+
+
+# ── 為每筆交易標注入場時的制度 ─────────────────────────────────────
+def _tag_trades_with_regime(trades: list, daily_regimes: pd.Series) -> list:
+    """用 searchsorted 高效查找入場日期對應的制度。"""
+    if daily_regimes.empty or not trades:
+        return [{**t, "regime": "轉折期"} for t in trades]
+    dates  = daily_regimes.index
+    tagged = []
+    for t in trades:
+        buy_date = t["_buy_date"]
+        pos      = dates.searchsorted(buy_date, side="right") - 1
+        regime   = str(daily_regimes.iloc[pos]) if pos >= 0 else "轉折期"
+        tagged.append({**t, "regime": regime})
+    return tagged
+
+
+# ══════════════════════════════════════════════════════════════════
+# Tab 主入口
+# ══════════════════════════════════════════════════════════════════
+
+def render(stocks: list):
+    st.subheader("🗺️ 制度 × 策略矩陣")
+    st.markdown(
+        "> 對所有預設策略跑 Portfolio Walk-Forward，"
+        "按每筆 OOS 交易**入場時的恒指制度**分類聚合，"
+        "找出哪個策略在哪個制度表現最穩。"
+    )
+    st.divider()
+
+    n_strats = len(STRATEGY_PRESETS)
+
+    with st.expander("⚙️ 參數設定", expanded=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            rm_period = st.selectbox("總數據週期", ["3y", "5y", "10y"], index=1, key="rm_period")
+            rm_is     = st.slider("IS 窗口（月）",  6, 24, 12, 3, key="rm_is")
+            rm_oos    = st.slider("OOS 窗口（月）", 3, 12,  6, 1, key="rm_oos")
+        with c2:
+            rm_capital = st.number_input("每筆金額 (HKD)", value=100_000, step=10_000,
+                                         min_value=10_000, key="rm_capital")
+            rm_slip    = st.slider("滑點 (%)", 0.0, 1.0, 0.20, 0.05, key="rm_slip") / 100
+            rm_min     = st.number_input("每 Fold 最低有效 OOS 交易數",
+                                         value=5, min_value=1, key="rm_min")
+
+        total_m   = {"3y": 36, "5y": 60, "10y": 120}[rm_period]
+        est_folds = max(0, (total_m - rm_is) // rm_oos)
+        st.info(
+            f"預計跑 **{n_strats} 個策略** × 約 **{est_folds} 個 Fold** × {len(stocks)} 隻股票。"
+            f"每策略約 1–3 分鐘，全程約 **{n_strats * 2}–{n_strats * 3} 分鐘**。"
+        )
+
+    if not st.button(f"🚀 開始跑全部 {n_strats} 個策略", type="primary", key="run_rm"):
+        if st.session_state.get("rm_done"):
+            st.info("💡 上次結果仍在 session 中，可直接查看。重新跑會覆蓋。")
+        return
+
+    # ── Step 1：下載 HSI，計算每日制度 ─────────────────────────────
+    with st.spinner("下載恒指數據並計算每日制度..."):
+        df_hsi = get_stock_data("^HSI", period=rm_period)
+    if df_hsi.empty:
+        st.error("❌ 無法取得恒指數據"); return
+    df_hsi        = calculate_indicators(df_hsi)
+    daily_regimes = _calc_daily_regimes(df_hsi)
+
+    regime_dist = daily_regimes.value_counts()
+    st.success(
+        "✅ 恒指 " + "  ".join(
+            f"{REGIME_EMOJI.get(r,'')} {r} {regime_dist.get(r,0)}日"
+            for r in REGIMES_ORDER if regime_dist.get(r, 0) > 0
+        )
+    )
+
+    # ── Step 2：下載 / 確認股票數據（只下載一次，所有策略共用）───────
+    st.markdown("#### 📥 準備股票數據")
+    stock_data: dict = {}
+    dl_pbar = st.progress(0, text="下載中...")
+    for i, ticker in enumerate(stocks):
+        dl_pbar.progress((i + 1) / len(stocks), text=f"下載 {ticker}...")
+        df_t = get_stock_data(ticker, period=rm_period)
+        if not df_t.empty and len(df_t) >= 62:
+            stock_data[ticker] = calculate_indicators(df_t)
+    dl_pbar.empty()
+
+    if not stock_data:
+        st.error("❌ 無有效股票數據"); return
+    st.success(f"✅ 準備好 **{len(stock_data)}** 隻股票")
+
+    # ── Step 3：逐策略跑 WF，收集交易並標注制度 ─────────────────────
+    st.markdown("#### 🔬 逐策略執行 Walk-Forward")
+
+    # matrix_raw[strat_name][regime] = {"avg": float, "n": int, "wins": int}
+    matrix_raw: dict = {}
+
+    outer_pbar   = st.progress(0, text="等待中...")
+    strat_status = st.empty()
+
+    for si, (strat_name, strat_cfg) in enumerate(STRATEGY_PRESETS.items()):
+        outer_pbar.progress(si / n_strats, text=f"策略 {si+1}/{n_strats}：{strat_name}")
+        strat_status.info(f"正在跑：**{strat_name}**")
+
+        wf_res = run_portfolio_walk_forward(
+            stock_data,
+            buy_sigs=strat_cfg["buy"],
+            sell_sigs=strat_cfg["sell"],
+            is_months=rm_is,
+            oos_months=rm_oos,
+            trade_size=float(rm_capital),
+            slippage=rm_slip,
+            min_oos_trades=int(rm_min),
+        )
+
+        # 收集所有有效 Fold 的策略出場交易（期末強制平倉已排除）
+        all_oos = []
+        for fold in wf_res:
+            if fold.get("valid_oos"):
+                all_oos.extend(fold["oos_trades"])
+
+        if not all_oos:
+            matrix_raw[strat_name] = {}
+            continue
+
+        tagged = _tag_trades_with_regime(all_oos, daily_regimes)
+
+        buckets: dict = {}
+        for t in tagged:
+            r = t.get("regime", "轉折期")
+            buckets.setdefault(r, []).append(t["回報%"])
+
+        matrix_raw[strat_name] = {
+            r: {
+                "avg":  round(sum(v) / len(v), 2),
+                "n":    len(v),
+                "wins": sum(1 for x in v if x > 0),
+            }
+            for r, v in buckets.items()
+        }
+
+    outer_pbar.progress(1.0, text="✅ 全部完成！")
+    strat_status.empty()
+    outer_pbar.empty()
+    st.session_state["rm_done"] = True
+
+    # ── Step 4：建立矩陣 DataFrame ──────────────────────────────────
+    # 只保留至少有一筆資料的制度，按 REGIMES_ORDER 排序
+    active_regimes = [r for r in REGIMES_ORDER if any(
+        r in matrix_raw.get(s, {}) for s in matrix_raw
+    )]
+    col_labels = {r: f"{REGIME_EMOJI.get(r, '')} {r}" for r in active_regimes}
+    cols       = [col_labels[r] for r in active_regimes]
+
+    df_val  = pd.DataFrame(float("nan"), index=list(STRATEGY_PRESETS.keys()), columns=cols)
+    df_n    = pd.DataFrame(0,            index=list(STRATEGY_PRESETS.keys()), columns=cols)
+    df_disp = pd.DataFrame("—",          index=list(STRATEGY_PRESETS.keys()), columns=cols)
+
+    for strat_name in STRATEGY_PRESETS:
+        data = matrix_raw.get(strat_name, {})
+        for regime in active_regimes:
+            col = col_labels[regime]
+            if regime not in data:
+                continue
+            cell  = data[regime]
+            avg_r = cell["avg"]
+            n     = cell["n"]
+            wr    = round(cell["wins"] / n * 100) if n > 0 else 0
+            df_val.loc[strat_name, col]  = avg_r
+            df_n.loc[strat_name, col]    = n
+            sign = "+" if avg_r >= 0 else ""
+            df_disp.loc[strat_name, col] = f"{sign}{avg_r:.1f}%  ({n}筆 {wr}%勝)"
+
+    # ── Step 5：顯示矩陣 ────────────────────────────────────────────
+    st.divider()
+    st.markdown("### 📊 制度 × 策略矩陣")
+    st.caption(
+        "格式：平均每筆 OOS 回報%（交易筆數 勝率%）｜"
+        "🟢深 > +3%  🟢淺 > 0%  🔴淺 < 0%  🔴深 < -3%  — = 無數據"
+    )
+
+    def _color_val(v):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return ""
+        if pd.isna(v):
+            return ""
+        if v >  3:  return "background-color:#085041;color:#9FE1CB;font-weight:500"
+        if v >  0:  return "background-color:#1D9E75;color:#E1F5EE"
+        if v > -3:  return "background-color:#D85A30;color:#FAECE7;font-weight:500"
+        return              "background-color:#791F1F;color:#F7C1C1;font-weight:500"
+
+    styled = df_disp.style.apply(
+        lambda _: df_val.map(_color_val),
+        axis=None,
+    )
+    st.dataframe(styled, use_container_width=True)
+
+    # ── Step 6：每個制度的最佳 / 最差策略摘要 ───────────────────────
+    st.divider()
+    st.markdown("### 🏆 每個制度的最佳策略")
+
+    best_rows = []
+    for regime in active_regimes:
+        col   = col_labels[regime]
+        clean = df_val[col].dropna()
+        if clean.empty:
+            continue
+        best_s  = clean.idxmax()
+        worst_s = clean.idxmin()
+        best_v  = clean.max()
+        worst_v = clean.min()
+        best_n  = int(df_n.loc[best_s, col]) if best_s in df_n.index else 0
+        best_rows.append({
+            "制度":             f"{REGIME_EMOJI.get(regime,'')} {regime}",
+            "最佳策略":         best_s,
+            "OOS 均回報%":      f"{'+'if best_v>=0 else ''}{best_v:.1f}%",
+            "交易筆數":         best_n,
+            "最差策略":         worst_s,
+            "最差 OOS%":        f"{worst_v:.1f}%",
+        })
+
+    if best_rows:
+        df_best = pd.DataFrame(best_rows)
+
+        def _cr(val):
+            s = str(val)
+            if s.startswith("+"):  return "color:#1D9E75;font-weight:500"
+            if s.startswith("-"):  return "color:#E24B4A;font-weight:500"
+            return ""
+
+        st.dataframe(
+            df_best.style.map(_cr, subset=["OOS 均回報%", "最差 OOS%"]),
+            use_container_width=True, hide_index=True,
+        )
+
+    # 儲存結果
+    st.session_state["rm_matrix_raw"]  = matrix_raw
+    st.session_state["rm_df_val"]      = df_val
+    st.session_state["rm_df_disp"]     = df_disp
