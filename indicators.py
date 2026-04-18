@@ -84,11 +84,15 @@ def precompute_signals(df: pd.DataFrame, hsi_bullish: bool = True) -> dict:
     was_below  = close_ma10 < ma60_ma10
     b4 = was_below & (c["Close"] > c["MA20"]) & (p["Close"] <= p["MA20"]) & (c["Volume"] > vol_ma * 1.3)
 
-    b5_raw = c["Close"] < c["BB_lower"]
-    b5 = b5_raw if hsi_bullish else pd.Series(False, index=df.index)
-
-    b6_raw = c["RSI"] < 30
-    b6 = b6_raw if hsi_bullish else pd.Series(False, index=df.index)
+    # ── GATE 移除 ──────────────────────────────────────────────────
+    # 原代碼：b5/b6 在 hsi_bullish=False（熊市）時強制為 False。
+    # 移除原因：WF 驗證顯示 b5+b6 在熊市（弱熊+8%/204筆、強熊+12.5%/228筆）
+    # 表現優於牛市，均值回歸策略在高波動環境反而更有效。
+    # 保留 gate 導致 WF 與實盤掃描行為不一致，現統一為全天候觸發。
+    # hsi_bullish 參數保留以維持向後相容，但不再影響 b5/b6。
+    b5 = c["Close"] < c["BB_lower"]
+    b6 = c["RSI"] < 30
+    # ── END GATE 移除 ─────────────────────────────────────────────
 
     b7 = (c["DIF"] > c["DEA"]) & (p["DIF"] <= p["DEA"])
 
@@ -111,9 +115,6 @@ def precompute_signals(df: pd.DataFrame, hsi_bullish: bool = True) -> dict:
     s2 = c["Close"] > c["BB_upper"]
 
     # ── BUG FIX 1 ──────────────────────────────────────────────────
-    # 原代碼：close_max10 = df["Close"].rolling(10).max()
-    # 問題：rolling().max() 包含當日收盤價本身，屬於前視偏差（look-ahead bias）。
-    # 修復：改用 .shift(1) 確保只看「昨日及以前」的10日最高收盤，不偷看當日數據。
     close_max10 = df["Close"].shift(1).rolling(10).max()
     s3 = (c["Close"] >= close_max10 * 0.995) & (c["Volume"] < vol_ma * 0.6)
     # ── END FIX 1 ─────────────────────────────────────────────────
