@@ -8,9 +8,9 @@
 STRATEGY_PRESETS = {
 
     # ── 1. 趨勢動能 b1+b8+b9 ─────────────────────────────────────
-    # ❌ WF 結果：OOS -0.00%，退化率44.8%，正回報2/5，不可信
+    # ❌ WF 結果：OOS -0.06%，退化率29.0%，正回報2/5，策略危險
     "🔥 趨勢動能（momentum）": {
-        "desc": "突破放量+趨勢確認+52週新高。WF結果：OOS≈0%，退化率44.8%，2/5正回報。港股近年弱勢市場效果差。",
+        "desc": "突破放量+趨勢確認+52週新高。WF結果：OOS -0.06%（虧損），退化率29.0%，2/5正回報。港股近年弱勢市場效果差，不建議實盤。",
         "buy":  (True,  False, False, False, False, False, False, True,  True,  False),
         #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
         "sell": (True,  False, False, True,  False, False, False),
@@ -18,9 +18,9 @@ STRATEGY_PRESETS = {
     },
 
     # ── 2. 趨勢回調低吸 b8+b10 ───────────────────────────────────
-    # ✅ WF 結果：OOS +0.93%，退化率-54.2%，正回報4/5，策略穩健
+    # ✅ WF 結果：OOS +0.94%，退化率-52.9%，正回報4/5，策略穩健
     "🎯 趨勢回調低吸（pullback）": {
-        "desc": "上升趨勢中縮量回調至MA20再進場。WF結果：OOS +0.93%，退化率-54.2%（優），4/5正回報。",
+        "desc": "上升趨勢中縮量回調至MA20再進場。WF結果：OOS +0.94%，退化率-52.9%（優），4/5正回報。",
         "buy":  (False, False, False, False, False, False, False, True,  False, True),
         #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
         "sell": (True,  False, False, False, False, True,  False),
@@ -28,9 +28,9 @@ STRATEGY_PRESETS = {
     },
 
     # ── 3. 突破確認 b1+b8 ─────────────────────────────────────────
-    # ✅ WF 結果：OOS +1.17%，退化率-102.1%，正回報4/6，策略穩健
+    # ✅ WF 結果：OOS +1.12%，退化率-95.1%，正回報4/6，策略穩健
     "⚡ 突破確認（breakout）": {
-        "desc": "突破放量+趨勢確認。WF結果：OOS +1.17%，退化率-102.1%（優），4/6正回報。制度矩陣：震盪市+4.5%/轉折期+4.2%最強。",
+        "desc": "突破放量+趨勢確認。WF結果：OOS +1.12%，退化率-95.1%（優），4/6正回報。制度矩陣：震盪市+4.5%/轉折期+4.2%最強。",
         "buy":  (True,  False, False, False, False, False, False, True,  False, False),
         #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
         "sell": (True,  False, False, True,  False, False, False),
@@ -38,9 +38,9 @@ STRATEGY_PRESETS = {
     },
 
     # ── 4. 底部形態完成 b4+b7 ─────────────────────────────────────
-    # ✅ WF 結果：OOS +2.03%，退化率-157.3%，正回報4/5，策略穩健
+    # ✅ WF 結果：OOS +2.03%，退化率-164.6%，正回報4/5，策略穩健
     "🏗️ 底部形態完成（bottom）": {
-        "desc": "底部突破MA20+MACD金叉。WF結果：OOS +2.03%，退化率-157.3%（優），4/5正回報。",
+        "desc": "底部突破MA20+MACD金叉。WF結果：OOS +2.03%，退化率-164.6%（優），4/5正回報。",
         "buy":  (False, False, False, True,  False, False, True,  False, False, False),
         #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
         "sell": (True,  False, False, False, False, True,  False),
@@ -48,7 +48,7 @@ STRATEGY_PRESETS = {
     },
 
     # ── 5. 超賣反彈 b6+b7 ─────────────────────────────────────────
-    # 🟡 WF 結果：OOS +6.89%，退化率47.3%，但僅2/7有效Fold（信心低）
+    # 🟡 WF 結果：OOS +6.89%，退化率47.3%，但僅2/7有效Fold，信心低
     "📉 超賣反彈（oversold bounce）": {
         "desc": "RSI超賣+MACD金叉買入，布林上軌+RSI超買出場。WF結果：OOS +6.89%但僅2/7有效Fold，信號稀少需謹慎。",
         "buy":  (False, False, False, False, False, True,  True,  False, False, False),
@@ -58,9 +58,9 @@ STRATEGY_PRESETS = {
     },
 
     # ── 6. 量化確認 b1+b2+b8 ──────────────────────────────────────
-    # ⚠️ WF 結果：OOS +1.24%，退化率-87.1%，但正回報僅3/7，需注意
+    # ⚠️ WF 結果：OOS +1.00%，退化率-88.7%，但正回報僅3/7，穩定性待提升
     "📊 量化確認（quant confirm）": {
-        "desc": "突破放量+MA5金叉+趨勢確認三重確認。WF結果：OOS +1.24%，退化率-87.1%，但3/7正回報，穩定性待提升。",
+        "desc": "突破放量+MA5金叉+趨勢確認三重確認。WF結果：OOS +1.00%，退化率-88.7%，但3/7正回報，穩定性待提升。",
         "buy":  (True,  True,  False, False, False, False, False, True,  False, False),
         #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
         "sell": (True,  False, False, True,  False, False, False),
@@ -68,11 +68,11 @@ STRATEGY_PRESETS = {
     },
 
     # ── 7. 均值回歸 b5+b6 ─────────────────────────────────────────
-    # ✅✅ WF 結果：OOS +10.50%，退化率-38.3%，7/7正回報，7/7有效Fold
+    # ✅✅ WF 結果：OOS +10.58%，退化率-38.8%，7/7正回報，7/7有效Fold
     # 全部策略中表現最佳，制度矩陣8/8制度正回報
     # b5/b6 gate 已移除（indicators.py），全天候觸發
     "📈 均值回歸（mean reversion）": {
-        "desc": "布林下軌+RSI超賣買入，布林上軌+RSI超買出場。WF最佳策略：OOS +10.50%，退化率-38.3%，7/7正回報，8/8制度正回報。全天候。",
+        "desc": "布林下軌+RSI超賣買入，布林上軌+RSI超買出場。WF最佳策略：OOS +10.58%，退化率-38.8%，7/7正回報，8/8制度正回報。全天候。",
         "buy":  (False, False, False, False, True,  True,  False, False, False, False),
         #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
         "sell": (False, True,  False, False, True,  False, False),
@@ -80,10 +80,10 @@ STRATEGY_PRESETS = {
     },
 
     # ── 8. 均值回歸長持 b5+b6 / s6 ───────────────────────────────
-    # ✅ WF 結果：OOS +2.72%，退化率17.8%，正回報4/6，策略穩健
+    # ✅ WF 結果：OOS +2.73%，退化率16.7%，正回報4/6，策略穩健
     # 改用MACD死叉出場，持倉更長，比s2+s5版本回報低但退化率更正常
     "🔄 均值回歸長持（mean reversion long）": {
-        "desc": "布林下軌+RSI超賣買入，MACD死叉出場。WF結果：OOS +2.72%，退化率17.8%，4/6正回報。持倉較長，捕捉完整反彈波段。",
+        "desc": "布林下軌+RSI超賣買入，MACD死叉出場。WF結果：OOS +2.73%，退化率16.7%，4/6正回報。持倉較長，捕捉完整反彈波段。",
         "buy":  (False, False, False, False, True,  True,  False, False, False, False),
         #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
         "sell": (False, False, False, False, False, True,  False),
@@ -91,10 +91,10 @@ STRATEGY_PRESETS = {
     },
 
     # ── 9. 底部形態超買出 b4+b7 / s2+s5 ──────────────────────────
-    # ✅ WF 結果：OOS +3.64%，退化率-63.7%，6/6正回報，6/7有效Fold
+    # ✅ WF 結果：OOS +3.62%，退化率-64.0%，6/6正回報，6/7有效Fold
     # 原版b4+b7改賣出條件，讓反彈走到超買才離場
     "🏗️+ 底部形態超買出（bottom+overbought exit）": {
-        "desc": "底部突破MA20+MACD金叉買入，布林上軌+RSI超買出場。WF結果：OOS +3.64%，退化率-63.7%（優），6/6正回報。比原版更完整捕捉反彈。",
+        "desc": "底部突破MA20+MACD金叉買入，布林上軌+RSI超買出場。WF結果：OOS +3.62%，退化率-64.0%（優），6/6正回報。比原版更完整捕捉反彈。",
         "buy":  (False, False, False, True,  False, False, True,  False, False, False),
         #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
         "sell": (False, True,  False, False, True,  False, False),
