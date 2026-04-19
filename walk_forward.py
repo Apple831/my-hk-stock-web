@@ -10,7 +10,7 @@ from indicators import calculate_indicators, precompute_signals
 from backtest import run_backtest, calc_bt_metrics, build_hsi_filter
 
 
-# ── 改進二：helper — 把 buy_sigs tuple 與 extra_buy 合併（AND 邏輯）──
+# ── helper：把 buy_sigs tuple 與 extra_buy 合併 ─────────────────────
 def _merge_buy_sigs(buy_sigs: tuple, extra_buy: tuple) -> tuple:
     if not any(extra_buy):
         return buy_sigs
@@ -20,13 +20,76 @@ def _merge_buy_sigs(buy_sigs: tuple, extra_buy: tuple) -> tuple:
 # ── helper：把 OOS 交易分成策略出場 vs 期末強制平倉 ─────────────────
 def _split_oos_trades(trades: list) -> tuple:
     """
-    回傳 (strategy_trades, forced_trades)
-    strategy_trades：賣出原因為策略訊號 / 止損 / 止盈 / 超時（有意義的出場）
+    strategy_trades：賣出原因為策略訊號 / 止損 / 止盈 / 超時
     forced_trades：Fold 結束強制平倉（賣出日期含「持倉中」）
     """
     strategy = [t for t in trades if "（持倉中）" not in t.get("賣出日期", "")]
     forced   = [t for t in trades if "（持倉中）"     in t.get("賣出日期", "")]
     return strategy, forced
+
+
+# ══════════════════════════════════════════════════════════════════
+# 方案 A：延伸追蹤強制平倉交易（純診斷，不計入 WF metrics）
+# ══════════════════════════════════════════════════════════════════
+# 用全期數據（而非 Fold 切片）重跑回測，讓原本在 Fold 邊界被強制平倉的
+# 交易繼續持有，直到真實 sell 信號觸發，或延伸期 365 日上限。
+#
+# 輸出的每筆交易包含：
+#   - 正常交易欄位（買入/賣出日期、回報%、持倉天數 等）
+#   - _is_extended = True
+#   - _still_held_at_end：延伸期末仍未觸發 sell（超長持有）
+
+def _get_extended_trades(
+    full_df: pd.DataFrame,
+    effective_buy: tuple,
+    sell_sigs: tuple,
+    oos_start_date, oos_end_date,
+    trade_size: float, slippage: float,
+    stop_loss_pct, take_profit_pct, max_hold_days,
+    hsi_filter: pd.Series,
+    max_extension_days: int = 365,
+) -> list:
+    if full_df is None or full_df.empty:
+        return []
+
+    oos_end_idx = full_df.index.searchsorted(oos_end_date, side="right")
+    if oos_end_idx >= len(full_df):
+        return []  # 無數據可延伸
+
+    extended_end_idx = min(oos_end_idx + max_extension_days, len(full_df))
+    warmup_start     = max(0, full_df.index.searchsorted(oos_start_date) - 61)
+    extended_slice   = full_df.iloc[warmup_start:extended_end_idx].copy()
+    extended_slice   = calculate_indicators(extended_slice)
+
+    if len(extended_slice) < 62:
+        return []
+
+    try:
+        extended_trades, _, _ = run_backtest(
+            extended_slice, effective_buy, sell_sigs,
+            trade_size=trade_size, slippage=slippage,
+            stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct,
+            max_hold_days=max_hold_days, _precomputed=None,
+            market_filter_series=hsi_filter,
+        )
+    except Exception:
+        return []
+
+    # 保留「OOS 內進場，OOS 結束後才出場」的交易 —— 即原本會被強制平倉的那批
+    result = []
+    for t in extended_trades:
+        buy_d  = t["_buy_date"]
+        sell_d = t["_sell_date"]
+        if buy_d < oos_start_date or buy_d > oos_end_date:
+            continue
+        if sell_d <= oos_end_date:
+            continue  # OOS 內就自然出場，已在 strategy trades 裡
+        t_copy = {**t}
+        t_copy["_is_extended"] = True
+        t_copy["_still_held_at_end"] = "（持倉中）" in t.get("賣出日期", "")
+        result.append(t_copy)
+
+    return result
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -46,6 +109,7 @@ def run_walk_forward(
     min_oos_trades: int = 3,
     hsi_filter: pd.Series = None,
     extra_buy_sigs: tuple = None,
+    track_extended: bool = True,
 ) -> list:
     if df.empty or len(df) < 60:
         return []
@@ -67,7 +131,7 @@ def run_walk_forward(
         if len(is_df) < 62 or len(oos_df) < 10:
             break
 
-        # ── IS ──────────────────────────────────────────────────
+        # ── IS ───────────────────────────────────────────────────
         pre_is = precompute_signals(is_df)
         is_trades, is_equity, _ = run_backtest(
             is_df, effective_buy, sell_sigs,
@@ -78,7 +142,7 @@ def run_walk_forward(
         )
         is_metrics = calc_bt_metrics(is_trades, is_equity, trade_size)
 
-        # ── OOS（含 61 日 warmup）────────────────────────────────
+        # ── OOS（含 61 日 warmup）─────────────────────────────────
         warmup_start = max(0, start + is_days - 61)
         oos_full     = df.iloc[warmup_start : start + is_days + oos_days].copy()
         oos_full     = calculate_indicators(oos_full)
@@ -92,14 +156,12 @@ def run_walk_forward(
         )
 
         oos_start_date = oos_df.index[0]
-        oos_trades = [t for t in oos_trades_all if t["_buy_date"] >= oos_start_date]
+        oos_end_date   = oos_df.index[-1]
+        oos_trades     = [t for t in oos_trades_all if t["_buy_date"] >= oos_start_date]
 
-        # ── FIX：分離策略出場 vs 期末強制平倉 ────────────────────
-        # 期末強制平倉是 Fold 邊界造成的人工截斷，不代表策略的真實出場品質。
-        # OOS equity curve 和 metrics 只計入策略出場（strategy_trades），
-        # 強制平倉交易保留在 forced_trades 供展示，但不計入績效指標。
         oos_strategy_trades, oos_forced_trades = _split_oos_trades(oos_trades)
 
+        # equity curve 只用策略出場
         if oos_strategy_trades:
             sell_map: dict = {}
             for t in oos_strategy_trades:
@@ -117,25 +179,37 @@ def run_walk_forward(
                 {"equity": [trade_size] * len(oos_df)}, index=oos_df.index,
             )
 
-        # metrics 只用策略出場交易計算（calc_bt_metrics 內部也會過濾，但傳乾淨資料更明確）
         oos_metrics = calc_bt_metrics(oos_strategy_trades, oos_equity, trade_size)
         valid_oos   = len(oos_strategy_trades) >= min_oos_trades
 
+        # ── 方案 A：延伸追蹤 ──────────────────────────────────────
+        oos_extended_trades = []
+        if track_extended and oos_forced_trades:
+            oos_extended_trades = _get_extended_trades(
+                df, effective_buy, sell_sigs,
+                oos_start_date, oos_end_date,
+                trade_size, slippage,
+                stop_loss_pct, take_profit_pct, max_hold_days,
+                hsi_filter,
+            )
+
         results.append({
-            "fold":              fold,
-            "is_start":          is_df.index[0],  "is_end":   is_df.index[-1],
-            "oos_start":         oos_df.index[0], "oos_end":  oos_df.index[-1],
-            "is_metrics":        is_metrics  or {},
-            "oos_metrics":       oos_metrics or {},
-            "is_trades":         is_trades,
-            "oos_trades":        oos_strategy_trades,   # 只含策略出場
-            "oos_forced_trades": oos_forced_trades,     # 強制平倉單獨存放
-            "is_equity":         is_equity,
-            "oos_equity":        oos_equity,
-            "valid_oos":         valid_oos,
-            "oos_trade_count":   len(oos_strategy_trades),
-            "forced_exit_count": len(oos_forced_trades),
-            "n_stocks":          1,
+            "fold":                fold,
+            "is_start":            is_df.index[0],  "is_end":   is_df.index[-1],
+            "oos_start":           oos_df.index[0], "oos_end":  oos_df.index[-1],
+            "is_metrics":          is_metrics  or {},
+            "oos_metrics":         oos_metrics or {},
+            "is_trades":           is_trades,
+            "oos_trades":          oos_strategy_trades,
+            "oos_forced_trades":   oos_forced_trades,
+            "oos_extended_trades": oos_extended_trades,
+            "is_equity":           is_equity,
+            "oos_equity":          oos_equity,
+            "valid_oos":           valid_oos,
+            "oos_trade_count":     len(oos_strategy_trades),
+            "forced_exit_count":   len(oos_forced_trades),
+            "extended_count":      len(oos_extended_trades),
+            "n_stocks":            1,
         })
 
         start += step
@@ -149,15 +223,12 @@ def run_walk_forward(
 # ══════════════════════════════════════════════════════════════════
 
 def _build_portfolio_equity(
-    trades: list,
-    date_range: pd.DatetimeIndex,
-    trade_size: float,
+    trades: list, date_range: pd.DatetimeIndex, trade_size: float,
 ) -> pd.DataFrame:
     if len(date_range) == 0:
         return pd.DataFrame()
     sell_map: dict = {}
     for t in trades:
-        # 期末強制平倉排除（"持倉中" 標記）
         if "（持倉中）" not in t.get("賣出日期", ""):
             pnl_hkd = trade_size * t["回報%"] / 100
             sell_map.setdefault(t["_sell_date"], []).append(pnl_hkd)
@@ -184,6 +255,7 @@ def run_portfolio_walk_forward(
     min_oos_trades: int = 5,
     hsi_filter: pd.Series = None,
     extra_buy_sigs: tuple = None,
+    track_extended: bool = True,
 ) -> list:
     if not stock_data:
         return []
@@ -219,9 +291,10 @@ def run_portfolio_walk_forward(
         oos_end_idx    = min(start + is_days + oos_days - 1, total_days - 1)
         oos_end_date   = all_dates[oos_end_idx]
 
-        all_is_trades  = []
-        all_oos_trades = []
-        n_stocks_run   = 0
+        all_is_trades       = []
+        all_oos_trades      = []
+        all_extended_trades = []
+        n_stocks_run        = 0
 
         for ticker, full_df in stock_data.items():
             if full_df is None or full_df.empty or len(full_df) < 62:
@@ -265,12 +338,27 @@ def run_portfolio_walk_forward(
             for t in oos_t:
                 t["ticker"] = ticker
             all_oos_trades.extend(oos_t)
+
+            # ── 方案 A：per-ticker 延伸追蹤（只在有強制平倉時才跑）────
+            if track_extended:
+                has_forced = any("（持倉中）" in t.get("賣出日期", "") for t in oos_t)
+                if has_forced:
+                    ticker_extended = _get_extended_trades(
+                        full_df, effective_buy, sell_sigs,
+                        oos_start_date, oos_end_date,
+                        trade_size, slippage,
+                        stop_loss_pct, take_profit_pct, max_hold_days,
+                        hsi_filter,
+                    )
+                    for t in ticker_extended:
+                        t["ticker"] = ticker
+                    all_extended_trades.extend(ticker_extended)
+
             n_stocks_run += 1
 
         is_date_range  = ref_df.index[(ref_df.index >= is_start_date)  & (ref_df.index <= is_end_date)]
         oos_date_range = ref_df.index[(ref_df.index >= oos_start_date) & (ref_df.index <= oos_end_date)]
 
-        # ── FIX：portfolio OOS 也分離強制平倉 ─────────────────────
         oos_strategy_trades, oos_forced_trades = _split_oos_trades(all_oos_trades)
 
         is_equity  = _build_portfolio_equity(all_is_trades,       is_date_range,  trade_size)
@@ -287,20 +375,22 @@ def run_portfolio_walk_forward(
         valid_oos = len(oos_strategy_trades) >= min_oos_trades
 
         results.append({
-            "fold":              fold,
-            "is_start":          is_start_date,  "is_end":   is_end_date,
-            "oos_start":         oos_start_date, "oos_end":  oos_end_date,
-            "is_metrics":        is_metrics  or {},
-            "oos_metrics":       oos_metrics or {},
-            "is_trades":         all_is_trades,
-            "oos_trades":        oos_strategy_trades,
-            "oos_forced_trades": oos_forced_trades,
-            "is_equity":         is_equity,
-            "oos_equity":        oos_equity,
-            "valid_oos":         valid_oos,
-            "oos_trade_count":   len(oos_strategy_trades),
-            "forced_exit_count": len(oos_forced_trades),
-            "n_stocks":          n_stocks_run,
+            "fold":                fold,
+            "is_start":            is_start_date,  "is_end":   is_end_date,
+            "oos_start":           oos_start_date, "oos_end":  oos_end_date,
+            "is_metrics":          is_metrics  or {},
+            "oos_metrics":         oos_metrics or {},
+            "is_trades":           all_is_trades,
+            "oos_trades":          oos_strategy_trades,
+            "oos_forced_trades":   oos_forced_trades,
+            "oos_extended_trades": all_extended_trades,
+            "is_equity":           is_equity,
+            "oos_equity":          oos_equity,
+            "valid_oos":           valid_oos,
+            "oos_trade_count":     len(oos_strategy_trades),
+            "forced_exit_count":   len(oos_forced_trades),
+            "extended_count":      len(all_extended_trades),
+            "n_stocks":            n_stocks_run,
         })
 
         start += oos_days
@@ -312,7 +402,7 @@ def run_portfolio_walk_forward(
 
 
 # ══════════════════════════════════════════════════════════════════
-# 共用：退化率
+# 共用：退化率 & 延伸追蹤摘要
 # ══════════════════════════════════════════════════════════════════
 
 def _wf_degradation(is_ret: float, oos_ret: float) -> float:
@@ -321,8 +411,31 @@ def _wf_degradation(is_ret: float, oos_ret: float) -> float:
     return (is_ret - oos_ret) / abs(is_ret) * 100
 
 
+def _extended_summary(extended_trades: list) -> dict:
+    if not extended_trades:
+        return {}
+    closed = [t for t in extended_trades if not t.get("_still_held_at_end", False)]
+    still  = [t for t in extended_trades if     t.get("_still_held_at_end", False)]
+    if not closed:
+        return {"total": len(extended_trades), "closed": 0, "still_held": len(still)}
+    rets    = [t["回報%"] for t in closed]
+    wins    = sum(1 for r in rets if r > 0)
+    avg_ret = sum(rets) / len(rets)
+    avg_day = sum(t["持倉天數"] for t in closed) / len(closed)
+    return {
+        "total":      len(extended_trades),
+        "closed":     len(closed),
+        "still_held": len(still),
+        "avg_return": round(avg_ret, 2),
+        "win_rate":   round(wins / len(closed) * 100, 1),
+        "avg_days":   round(avg_day, 1),
+        "best":       round(max(rets), 2),
+        "worst":      round(min(rets), 2),
+    }
+
+
 # ══════════════════════════════════════════════════════════════════
-# 共用：結果展示
+# 結果展示
 # ══════════════════════════════════════════════════════════════════
 
 def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio: bool = False):
@@ -338,7 +451,8 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
         oos_ret = om.get("平均每筆回報%", 0.0)
         deg     = _wf_degradation(is_ret, oos_ret)
         deg_display = f"{deg:.1f}%" if deg is not None else "N/A (IS≈0)"
-        forced_n = r.get("forced_exit_count", 0)
+        forced_n   = r.get("forced_exit_count", 0)
+        extended_n = r.get("extended_count", 0)
         row = {
             "Fold":          r["fold"],
             "IS 期間":       f"{r['is_start'].strftime('%Y-%m')} → {r['is_end'].strftime('%Y-%m')}",
@@ -351,6 +465,7 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
             "IS 交易數":     im.get("交易次數", 0),
             "OOS 交易數":    r["oos_trade_count"],
             "強制平倉數":    forced_n,
+            "延伸追蹤數":    extended_n,
             "有效":          "✅" if r["valid_oos"] else f"⚠️ 僅{r['oos_trade_count']}筆",
             "_deg_raw":      deg,
         }
@@ -368,12 +483,30 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
                else "建議增加股票數量或減少入場條件。"
         st.warning(f"⚠️ **{invalid_count} 個 Fold** OOS 交易不足或 IS≈0，已排除在評分之外。{hint}")
 
-    # 期末強制平倉總覽提示
-    total_forced = sum(r.get("forced_exit_count", 0) for r in wf_results)
+    # 全程強制平倉 + 延伸追蹤總覽
+    total_forced    = sum(r.get("forced_exit_count", 0) for r in wf_results)
+    all_extended    = [t for r in wf_results for t in r.get("oos_extended_trades", [])]
+    ext_summary_all = _extended_summary(all_extended)
+
     if total_forced > 0:
+        ext_text = ""
+        if ext_summary_all and ext_summary_all.get("closed", 0) > 0:
+            closed    = ext_summary_all["closed"]
+            still     = ext_summary_all["still_held"]
+            avg       = ext_summary_all.get("avg_return", 0)
+            wr        = ext_summary_all.get("win_rate", 0)
+            avg_days  = ext_summary_all.get("avg_days", 0)
+            sign      = "+" if avg >= 0 else ""
+            ext_text = (
+                f"<br>🔍 <b>延伸追蹤</b>：{closed} 筆已觸發真實出場"
+                f"（平均 {sign}{avg:.2f}%，勝率 {wr:.1f}%，平均持倉 {avg_days:.0f} 天）"
+            )
+            if still > 0:
+                ext_text += f"；{still} 筆延伸後仍持倉未出（超長持有）"
+
         st.info(
-            f"ℹ️ 全程共有 **{total_forced} 筆期末強制平倉**（Fold 邊界截斷），"
-            f"已從所有指標及 equity curve 中排除。可在下方逐 Fold 記錄中查閱明細。"
+            f"ℹ️ 全程 **{total_forced} 筆期末強制平倉**（Fold 邊界截斷，"
+            f"已從指標及 equity curve 排除）。{ext_text}",
         )
 
     if not valid_rows:
@@ -422,6 +555,47 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
               delta_color="off")
     c4.metric("OOS 正回報 Fold", f"{oos_positive}/{len(valid_rows)}")
     c5.metric("有效 Fold 數",    f"{len(valid_rows)}/{len(rows)}")
+
+    # ── 方案 A：延伸追蹤對比（診斷區）─────────────────────────────
+    if ext_summary_all and ext_summary_all.get("closed", 0) > 0:
+        st.divider()
+        st.markdown("### 🔍 延伸追蹤：強制平倉交易的真實結果")
+        st.caption(
+            "把原本在 Fold 邊界被強制平倉的交易保留，用全期數據繼續持有到真實 sell 信號觸發"
+            "（或 365 日上限）。純診斷用途，**不計入上方 WF 指標**。"
+        )
+
+        e1, e2, e3, e4 = st.columns(4)
+        e1.metric("真實出場交易數",
+                  f"{ext_summary_all['closed']} 筆",
+                  delta=f"共 {ext_summary_all['total']} 筆中",
+                  delta_color="off")
+        ext_avg = ext_summary_all["avg_return"]
+        e2.metric("真實出場均回報%",
+                  f"{'+' if ext_avg >= 0 else ''}{ext_avg:.2f}%",
+                  delta=f"vs OOS {avg_oos:+.2f}%",
+                  delta_color="normal")
+        e3.metric("真實出場勝率", f"{ext_summary_all['win_rate']:.1f}%")
+        e4.metric("平均持倉天數", f"{ext_summary_all['avg_days']:.0f} 天")
+
+        # Survivorship bias 警示
+        if ext_avg < avg_oos - 3:
+            st.error(
+                f"⚠️ **警示：疑似 survivorship bias**　"
+                f"WF 指標 OOS {avg_oos:+.2f}%，但加入原本被強制平倉的交易後真實均回報只有 "
+                f"{ext_avg:+.2f}%。原本的高 OOS 數字可能是只統計「跑完全程」的贏家所致。"
+            )
+        elif ext_avg > avg_oos:
+            st.success(
+                f"✅ 強制平倉交易的真實結果（{ext_avg:+.2f}%）比 WF OOS 指標"
+                f"（{avg_oos:+.2f}%）**更好**，說明原本 WF 數字沒有高估策略，策略紮實。"
+            )
+
+        if ext_summary_all.get("still_held", 0) > 0:
+            st.caption(
+                f"ℹ️ {ext_summary_all['still_held']} 筆即使延伸 365 日仍未觸發 sell 信號，"
+                f"按延伸期末收盤出場計算。這類交易的真實結果仍不可知。"
+            )
 
     st.divider()
 
@@ -539,25 +713,28 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
     st.divider()
     st.markdown("### 🔬 逐 Fold 交易記錄")
     for r, row in zip(wf_results, rows):
-        fold_n   = r["fold"]
-        im       = r["is_metrics"]
-        om       = r["oos_metrics"]
-        valid    = r["valid_oos"]
-        forced_n = r.get("forced_exit_count", 0)
-        label    = (
+        fold_n     = r["fold"]
+        im         = r["is_metrics"]
+        om         = r["oos_metrics"]
+        valid      = r["valid_oos"]
+        forced_n   = r.get("forced_exit_count", 0)
+        extended_n = r.get("extended_count", 0)
+
+        label = (
             f"{'✅' if valid else '⚠️'} Fold {fold_n}  ｜  "
             f"OOS: {r['oos_start'].strftime('%Y-%m-%d')} → {r['oos_end'].strftime('%Y-%m-%d')}  ｜  "
             f"IS {im.get('平均每筆回報%', 0):+.2f}%  →  OOS {om.get('平均每筆回報%', 0):+.2f}%"
             + (f"  ｜  策略出場 {r['oos_trade_count']} 筆" if valid else f"  ｜  ⚠️ 僅 {r['oos_trade_count']} 筆OOS")
-            + (f"  ｜  強制平倉 {forced_n} 筆（已排除）" if forced_n > 0 else "")
+            + (f"  ｜  強制 {forced_n} 延伸 {extended_n}" if forced_n > 0 else "")
         )
         with st.expander(label):
             if not valid:
                 st.warning(f"⚠️ 此 Fold OOS 僅 **{r['oos_trade_count']} 筆**策略出場，排除在評分之外。")
             if forced_n > 0:
                 st.caption(
-                    f"ℹ️ 本 Fold 有 **{forced_n} 筆期末強制平倉**（Fold 邊界截斷，非策略出場）"
-                    f"，已從指標及 equity curve 中排除。"
+                    f"ℹ️ 本 Fold 有 **{forced_n} 筆期末強制平倉**（不計入指標）"
+                    + (f"，其中 **{extended_n} 筆**已延伸追蹤到真實結果" if extended_n else "")
+                    + "。"
                 )
             if is_portfolio and r.get("n_stocks"):
                 st.caption(f"本 Fold 實際跑 {r['n_stocks']} 隻股票")
@@ -577,10 +754,10 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
             with col_oos:
                 st.markdown("**📗 Out-of-Sample（策略出場）**")
                 if om:
-                    oos_ret = om.get("平均每筆回報%", 0)
+                    oos_ret  = om.get("平均每筆回報%", 0)
                     is_ret_v = im.get("平均每筆回報%", 0)
-                    deg_v = _wf_degradation(is_ret_v, oos_ret)
-                    deg_str = f"退化 {deg_v:.1f}%" if deg_v is not None else "IS≈0，退化率無效"
+                    deg_v    = _wf_degradation(is_ret_v, oos_ret)
+                    deg_str  = f"退化 {deg_v:.1f}%" if deg_v is not None else "IS≈0，退化率無效"
                     st.metric("均回報%",  f"{oos_ret:+.2f}%", delta=deg_str, delta_color="off")
                     st.metric("勝率",     f"{om.get('勝率%', 0):.1f}%")
                     st.metric("交易次數", f"{om.get('交易次數', 0)}")
@@ -590,7 +767,7 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
                 else:
                     st.info("無交易（OOS 期間無訊號）")
 
-            # ── 策略出場交易記錄 ──────────────────────────────────
+            # 策略出場交易記錄
             display_cols = ["買入日期", "賣出日期", "買入價", "賣出價",
                             "回報%", "盈虧(HKD)", "持倉天數", "賣出原因"]
             if is_portfolio:
@@ -612,16 +789,47 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
             else:
                 st.info("本 Fold 無策略出場交易")
 
-            # ── 期末強制平倉（折疊，供參考）──────────────────────
+            # 強制平倉明細
             forced_list = r.get("oos_forced_trades", [])
             if forced_list:
                 with st.expander(f"📋 期末強制平倉明細（{len(forced_list)} 筆，未計入指標）"):
-                    st.caption("以下交易因 Fold 邊界強制平倉，不代表策略出場訊號，僅供參考。")
+                    st.caption("以下交易因 Fold 邊界強制平倉，不代表策略出場訊號。")
                     avail_f = [c for c in display_cols if c in forced_list[0]]
                     df_f    = pd.DataFrame(forced_list)[avail_f]
                     scols_f = [c for c in ["回報%", "盈虧(HKD)"] if c in df_f.columns]
                     st.dataframe(df_f.style.map(_cr, subset=scols_f),
                                  use_container_width=True, hide_index=True)
+
+            # 延伸追蹤明細（方案 A 新增）
+            ext_list = r.get("oos_extended_trades", [])
+            if ext_list:
+                ext_sum  = _extended_summary(ext_list)
+                closed_n = ext_sum.get("closed", 0)
+                still_n  = ext_sum.get("still_held", 0)
+                avg_r    = ext_sum.get("avg_return", 0)
+
+                with st.expander(
+                    f"🔍 延伸追蹤明細（{len(ext_list)} 筆；真實出場 {closed_n} 筆，"
+                    f"均 {'+' if avg_r >= 0 else ''}{avg_r:.2f}%；仍持倉 {still_n} 筆）"
+                ):
+                    st.caption(
+                        "以下是原本在 Fold 邊界被強制平倉的交易，用全期數據繼續持有到真實 sell 信號或 365 日上限。"
+                        "純診斷用途，不計入上方 WF 指標。"
+                    )
+
+                    ext_rows = []
+                    for t in ext_list:
+                        row_e = {}
+                        for col in display_cols:
+                            if col in t:
+                                row_e[col] = t[col]
+                        row_e["狀態"] = "⏳ 延伸後仍持倉" if t.get("_still_held_at_end") else "✅ 真實出場"
+                        ext_rows.append(row_e)
+                    if ext_rows:
+                        df_e    = pd.DataFrame(ext_rows)
+                        scols_e = [c for c in ["回報%", "盈虧(HKD)"] if c in df_e.columns]
+                        st.dataframe(df_e.style.map(_cr, subset=scols_e),
+                                     use_container_width=True, hide_index=True)
 
 
 def _show_summary_table(df_summary: pd.DataFrame, is_portfolio: bool):
