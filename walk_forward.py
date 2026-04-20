@@ -66,13 +66,15 @@ def _get_extended_trades(
         return []
 
     try:
+        bt_kw = {"min_hold_days": min_hold_days} if min_hold_days is not None else {}
         extended_trades, _, _ = run_backtest(
             extended_slice, effective_buy, sell_sigs,
             trade_size=trade_size, slippage=slippage,
             stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct,
-            max_hold_days=max_hold_days, min_hold_days=min_hold_days,
+            max_hold_days=max_hold_days,
             _precomputed=None,
             market_filter_series=hsi_filter,
+            **bt_kw,
         )
     except Exception:
         return []
@@ -136,13 +138,15 @@ def run_walk_forward(
 
         # ── IS ───────────────────────────────────────────────────
         pre_is = precompute_signals(is_df)
+        bt_kw = {"min_hold_days": min_hold_days} if min_hold_days is not None else {}
         is_trades, is_equity, _ = run_backtest(
             is_df, effective_buy, sell_sigs,
             trade_size=trade_size, slippage=slippage,
             stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct,
-            max_hold_days=max_hold_days, min_hold_days=min_hold_days,
+            max_hold_days=max_hold_days,
             _precomputed=pre_is,
             market_filter_series=hsi_filter,
+            **bt_kw,
         )
         is_metrics = calc_bt_metrics(is_trades, is_equity, trade_size)
 
@@ -155,9 +159,10 @@ def run_walk_forward(
             oos_full, effective_buy, sell_sigs,
             trade_size=trade_size, slippage=slippage,
             stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct,
-            max_hold_days=max_hold_days, min_hold_days=min_hold_days,
+            max_hold_days=max_hold_days,
             _precomputed=None,
             market_filter_series=hsi_filter,
+            **bt_kw,
         )
 
         oos_start_date = oos_df.index[0]
@@ -313,13 +318,15 @@ def run_portfolio_walk_forward(
                 continue
 
             pre_is = precompute_signals(is_df)
+            bt_kw = {"min_hold_days": min_hold_days} if min_hold_days is not None else {}
             is_t, _, _ = run_backtest(
                 is_df, effective_buy, sell_sigs,
                 trade_size=trade_size, slippage=slippage,
                 stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct,
-                max_hold_days=max_hold_days, min_hold_days=min_hold_days,
+                max_hold_days=max_hold_days,
                 _precomputed=pre_is,
                 market_filter_series=hsi_filter,
+                **bt_kw,
             )
             for t in is_t:
                 t["ticker"] = ticker
@@ -338,9 +345,10 @@ def run_portfolio_walk_forward(
                 oos_full_df, effective_buy, sell_sigs,
                 trade_size=trade_size, slippage=slippage,
                 stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct,
-                max_hold_days=max_hold_days, min_hold_days=min_hold_days,
+                max_hold_days=max_hold_days,
                 _precomputed=None,
                 market_filter_series=hsi_filter,
+                **bt_kw,
             )
             oos_t = [t for t in oos_t_all if t["_buy_date"] >= oos_start_date]
             for t in oos_t:
