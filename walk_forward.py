@@ -47,6 +47,7 @@ def _get_extended_trades(
     trade_size: float, slippage: float,
     stop_loss_pct, take_profit_pct, max_hold_days,
     hsi_filter: pd.Series,
+    min_hold_days=None,
     max_extension_days: int = 365,
 ) -> list:
     if full_df is None or full_df.empty:
@@ -69,7 +70,8 @@ def _get_extended_trades(
             extended_slice, effective_buy, sell_sigs,
             trade_size=trade_size, slippage=slippage,
             stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct,
-            max_hold_days=max_hold_days, _precomputed=None,
+            max_hold_days=max_hold_days, min_hold_days=min_hold_days,
+            _precomputed=None,
             market_filter_series=hsi_filter,
         )
     except Exception:
@@ -106,6 +108,7 @@ def run_walk_forward(
     stop_loss_pct: float = None,
     take_profit_pct: float = None,
     max_hold_days: int = None,
+    min_hold_days: int = None,
     min_oos_trades: int = 3,
     hsi_filter: pd.Series = None,
     extra_buy_sigs: tuple = None,
@@ -137,7 +140,8 @@ def run_walk_forward(
             is_df, effective_buy, sell_sigs,
             trade_size=trade_size, slippage=slippage,
             stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct,
-            max_hold_days=max_hold_days, _precomputed=pre_is,
+            max_hold_days=max_hold_days, min_hold_days=min_hold_days,
+            _precomputed=pre_is,
             market_filter_series=hsi_filter,
         )
         is_metrics = calc_bt_metrics(is_trades, is_equity, trade_size)
@@ -151,7 +155,8 @@ def run_walk_forward(
             oos_full, effective_buy, sell_sigs,
             trade_size=trade_size, slippage=slippage,
             stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct,
-            max_hold_days=max_hold_days, _precomputed=None,
+            max_hold_days=max_hold_days, min_hold_days=min_hold_days,
+            _precomputed=None,
             market_filter_series=hsi_filter,
         )
 
@@ -190,7 +195,7 @@ def run_walk_forward(
                 oos_start_date, oos_end_date,
                 trade_size, slippage,
                 stop_loss_pct, take_profit_pct, max_hold_days,
-                hsi_filter,
+                hsi_filter, min_hold_days=min_hold_days,
             )
 
         results.append({
@@ -252,6 +257,7 @@ def run_portfolio_walk_forward(
     stop_loss_pct: float = None,
     take_profit_pct: float = None,
     max_hold_days: int = None,
+    min_hold_days: int = None,
     min_oos_trades: int = 5,
     hsi_filter: pd.Series = None,
     extra_buy_sigs: tuple = None,
@@ -311,7 +317,8 @@ def run_portfolio_walk_forward(
                 is_df, effective_buy, sell_sigs,
                 trade_size=trade_size, slippage=slippage,
                 stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct,
-                max_hold_days=max_hold_days, _precomputed=pre_is,
+                max_hold_days=max_hold_days, min_hold_days=min_hold_days,
+                _precomputed=pre_is,
                 market_filter_series=hsi_filter,
             )
             for t in is_t:
@@ -331,7 +338,8 @@ def run_portfolio_walk_forward(
                 oos_full_df, effective_buy, sell_sigs,
                 trade_size=trade_size, slippage=slippage,
                 stop_loss_pct=stop_loss_pct, take_profit_pct=take_profit_pct,
-                max_hold_days=max_hold_days, _precomputed=None,
+                max_hold_days=max_hold_days, min_hold_days=min_hold_days,
+                _precomputed=None,
                 market_filter_series=hsi_filter,
             )
             oos_t = [t for t in oos_t_all if t["_buy_date"] >= oos_start_date]
@@ -348,7 +356,7 @@ def run_portfolio_walk_forward(
                         oos_start_date, oos_end_date,
                         trade_size, slippage,
                         stop_loss_pct, take_profit_pct, max_hold_days,
-                        hsi_filter,
+                        hsi_filter, min_hold_days=min_hold_days,
                     )
                     for t in ticker_extended:
                         t["ticker"] = ticker
