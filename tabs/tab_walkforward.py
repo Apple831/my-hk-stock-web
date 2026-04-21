@@ -8,6 +8,14 @@ from walk_forward import (
     show_walk_forward_results,
 )
 from ui_components import preset_selector, get_preset_sigs
+from config import STRATEGY_PRESETS, PRESET_CUSTOM
+
+
+# ── helper：從選定的 preset 讀取 min_hold_days ─────────────────────
+def _get_preset_min_hold(preset_name: str):
+    if preset_name == PRESET_CUSTOM:
+        return None
+    return STRATEGY_PRESETS.get(preset_name, {}).get("min_hold_days")
 
 
 def render(stocks: list):
@@ -69,8 +77,16 @@ def render(stocks: list):
 
     buy_sigs, sell_sigs = get_preset_sigs(_preset, buy_custom, sell_custom)
 
+    # ── 讀取 preset 的 min_hold_days（自定義時為 None）────────────
+    preset_min_hold = _get_preset_min_hold(_preset)
+    if preset_min_hold:
+        st.info(
+            f"🔒 此策略已啟用 **min_hold_days = {preset_min_hold} 交易日**"
+            f"（進場後 {preset_min_hold} 個 bar 內凍結策略 sell，只允許止損/止盈出場）"
+        )
+
     # ══════════════════════════════════════════════════════════════
-    # 改進二 + 改進三：共用進階過濾器設定
+    # 共用進階過濾器（改進二 + 三）
     # ══════════════════════════════════════════════════════════════
     st.divider()
     st.markdown("#### 🔧 進階入場過濾器（改進二 & 三）")
@@ -97,7 +113,6 @@ def render(stocks: list):
             ),
         )
 
-    # 改進二：b8 extra sigs tuple
     extra_buy = (False,False,False,False,False,False,False,use_b8_filter,False,False)
 
     if use_hsi_filter or use_b8_filter:
@@ -143,7 +158,6 @@ def render(stocks: list):
             if est_folds < 2:
                 st.warning("⚠️ 預計 Fold 數不足 2"); return
 
-            # 改進二：下載 HSI 並建立過濾器
             hsi_filter_series = None
             if use_hsi_filter:
                 with st.spinner("下載恒指數據以建立市場過濾器..."):
@@ -170,6 +184,7 @@ def render(stocks: list):
                     is_months=wf_is_months, oos_months=wf_oos_months,
                     trade_size=float(wf_capital), slippage=wf_slippage,
                     stop_loss_pct=sl_v, take_profit_pct=tp_v, max_hold_days=md_v,
+                    min_hold_days=preset_min_hold,
                     min_oos_trades=int(wf_min_oos),
                     hsi_filter=hsi_filter_series,
                     extra_buy_sigs=extra_buy if use_b8_filter else None,
@@ -241,7 +256,6 @@ def render(stocks: list):
             if est_folds_p < 2:
                 st.warning("⚠️ 預計 Fold 數不足 2"); return
 
-            # 改進二：HSI 過濾器
             hsi_filter_series = None
             if use_hsi_filter:
                 with st.spinner("下載恒指數據以建立市場過濾器..."):
@@ -275,6 +289,7 @@ def render(stocks: list):
                 is_months=wf_port_is, oos_months=wf_port_oos,
                 trade_size=float(wf_port_capital), slippage=wf_port_slip,
                 stop_loss_pct=sl_pv, take_profit_pct=tp_pv, max_hold_days=md_pv,
+                min_hold_days=preset_min_hold,
                 min_oos_trades=int(wf_port_min),
                 hsi_filter=hsi_filter_series,
                 extra_buy_sigs=extra_buy if use_b8_filter else None,
@@ -296,9 +311,8 @@ def render(stocks: list):
         預期效果：F3（2023年橫盤）虧損收窄或消失；代價是部分有效 Fold 的交易數會減少。
 
         **改進三（b8 個股趨勢確認）的作用**：額外要求個股本身在上升趨勢才入場。
-        與改進二疊加使用會大幅降低訊號頻率，需確認 OOS 交易數仍達門檻。
 
-        **OOS 拼接資金曲線**是最重要的圖表，只含有效 Fold。
-
-        **建議測試順序**：先單獨測改進二 → 再單獨測改進三 → 最後測兩者疊加。
+        **min_hold_days（MIN30 等策略）的作用**：進場後若干個交易日內凍結策略 sell 訊號，
+        只允許止損/止盈出場。用來過濾快死叉的假突破，例如 b1+b8/s6 原版 WF -0.70%
+        但延伸追蹤 +5.72%，差異主要來自 14 天內 MACD 假死叉。
         """)
