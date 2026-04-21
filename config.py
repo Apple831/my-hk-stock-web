@@ -91,11 +91,23 @@ STRATEGY_PRESETS = {
     # 診斷：14天內死叉多為假突破虧損單；長期死叉多為真趨勢賺錢單
     # 加入 min_hold_days=30 過濾快死叉 → 預期 WF 轉正
     "⚡+ 突破確認長持（breakout long, MIN30）": {
-        "desc": "突破放量+趨勢確認，MACD死叉出場，最少持倉30天過濾假突破。實驗策略：原版WF -0.70%但延伸+5.72%，短死叉都是假突破，長死叉才是真訊號。",
+        "desc": "突破放量+趨勢確認，MACD死叉出場，最少持倉30天過濾假突破。WF OOS +6.20%（-105.6%退化率優），延伸+3.82%，55天持倉。min_hold_days驗證：30天前死叉=假突破，30天後才是真趨勢。",
         "buy":  (True,  False, False, False, False, False, False, True,  False, False),
         "sell": (False, False, False, False, False, True,  False),
         "min_hold_days": 30,
     },
+
+    # ── 11. 底部形態 + MACD死叉出場 b4+b7 / s6 ────────────────────
+    # ✅ WF OOS +1.84%｜退化率 -141.8%（優）｜延伸 +10.67% (64 筆, 73.4% 勝率)｜21 天持倉
+    # 原版 b4+b7/s1+s6 的 s1（頭部破MA20）無貢獻，純 s6 更乾淨
+    "🏗️s6 底部形態死叉出（bottom+s6）": {
+        "desc": "底部突破MA20+MACD金叉，MACD死叉出場。WF OOS +1.84%，退化率-141.8%（優），延伸+10.67%（73.4%勝率）。比s1+s6版本更乾淨，s1無貢獻。",
+        "buy":  (False, False, False, True,  False, False, True,  False, False, False),
+        #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
+        "sell": (False, False, False, False, False, True,  False),
+        #        s1     s2     s3     s4     s5     s6     s7
+    },
+
 
 }
 
@@ -122,4 +134,16 @@ TV_HEADERS = {
     "Content-Type": "application/json",
     "Origin":  "https://www.tradingview.com",
     "Referer": "https://www.tradingview.com/",
+    # ── 11. 底部形態 + MACD死叉出場 b4+b7 / s6 ────────────────────
+    # ✅ WF OOS +1.84%｜退化率 -141.8%（優）｜延伸 +10.67% (64 筆, 73.4% 勝率)｜21 天持倉
+    # 原版 b4+b7/s1+s6 的 s1（頭部破MA20）無貢獻，純 s6 更乾淨
+    "🏗️s6 底部形態死叉出（bottom+s6）": {
+        "desc": "底部突破MA20+MACD金叉，MACD死叉出場。WF OOS +1.84%，退化率-141.8%（優），延伸+10.67%（73.4%勝率）。比s1+s6版本更乾淨，s1無貢獻。",
+        "buy":  (False, False, False, True,  False, False, True,  False, False, False),
+        #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
+        "sell": (False, False, False, False, False, True,  False),
+        #        s1     s2     s3     s4     s5     s6     s7
+    },
+
+
 }
