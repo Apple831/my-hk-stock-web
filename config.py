@@ -111,6 +111,27 @@ STRATEGY_PRESETS = {
         "min_hold_days": 20,
     },
 
+    # ── 14. 突破確認 MIN30 b1+b8 / s1+s4 ─────────────────────────
+    # 🔬 實驗：⚡M20 WF +1.79%（提升有限），試 MIN30 看能否推高
+    # 對比 ⚡+ b1+b8/s6 MIN30 WF +6.20%，推測 s1+s4 較 s6 慢觸發
+    "⚡M30 突破確認MIN30（breakout MIN30）": {
+        "desc": "突破放量+趨勢確認，破MA20或放量急跌出場，最少持倉30天。MIN20版本 WF +1.79%提升有限，試MIN30看能否推高。",
+        "buy":  (True,  False, False, False, False, False, False, True,  False, False),
+        "sell": (True,  False, False, True,  False, False, False),
+        "min_hold_days": 30,
+    },
+
+    # ── 15. MACD金叉死叉週期 MIN30 b7 / s6 ───────────────────────
+    # 🔬 實驗：🔄M20 WF +3.23%（大幅提升），試 MIN30 能否再推高
+    # MACD 金叉最易假信號，MIN20 已過濾很多，MIN30 或許捕捉更完整週期
+    "🔄M30 MACD週期MIN30（macd cycle MIN30）": {
+        "desc": "MACD金叉入場，MACD死叉出場，最少持倉30天。MIN20版本 WF +3.23%已驗證過濾假金叉有效，試MIN30捕捉完整MACD週期。",
+        "buy":  (False, False, False, False, False, False, True,  False, False, False),
+        "sell": (False, False, False, False, False, True,  False),
+        "min_hold_days": 30,
+    },
+
+
 }
 
 PRESET_NAMES  = ["✏️ 自定義"] + list(STRATEGY_PRESETS.keys())
