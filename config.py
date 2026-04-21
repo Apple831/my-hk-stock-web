@@ -14,7 +14,6 @@
 STRATEGY_PRESETS = {
 
     # ── 1. 趨勢動能 b1+b8+b9 ─────────────────────────────────────
-    # ❌ WF OOS -0.06%｜延伸 +6.76% (267 筆, 60% 勝率)｜WF 低估但原生版本虧損
     "🔥 趨勢動能（momentum）": {
         "desc": "突破放量+趨勢確認+52週新高。WF OOS -0.06%（原生虧損），延伸追蹤 +6.76%。原版不建議實盤。",
         "buy":  (True,  False, False, False, False, False, False, True,  True,  False),
@@ -22,7 +21,6 @@ STRATEGY_PRESETS = {
     },
 
     # ── 2. 趨勢回調低吸 b8+b10 ───────────────────────────────────
-    # ✅ WF OOS +1.14%｜延伸 +2.52% (1571 筆, 54% 勝率)｜穩定但回報低
     "🎯 趨勢回調低吸（pullback）": {
         "desc": "上升趨勢中縮量回調至MA20再進場。WF OOS +1.14%，延伸 +2.52%，1571筆大樣本，穩健但回報偏低。",
         "buy":  (False, False, False, False, False, False, False, True,  False, True),
@@ -30,7 +28,6 @@ STRATEGY_PRESETS = {
     },
 
     # ── 3. 突破確認 b1+b8 ─────────────────────────────────────────
-    # ✅ WF OOS +1.21%｜延伸 +7.11% (430 筆, 59% 勝率)｜WF 大幅低估
     "⚡ 突破確認（breakout）": {
         "desc": "突破放量+趨勢確認。WF OOS +1.21%，延伸 +7.11%（59%勝率），WF被大幅低估。制度矩陣：震盪/轉折市+4%。",
         "buy":  (True,  False, False, False, False, False, False, True,  False, False),
@@ -38,7 +35,6 @@ STRATEGY_PRESETS = {
     },
 
     # ── 4. 底部形態完成 b4+b7 / s1+s6 ─────────────────────────────
-    # ✅ WF OOS +1.63%｜延伸 +9.67% (61 筆, 70.5% 勝率)｜被嚴重低估
     "🏗️ 底部形態完成（bottom）": {
         "desc": "底部突破MA20+MACD金叉，破MA20或MACD死叉出場。WF OOS +1.63%，延伸 +9.67%（70.5%勝率），被嚴重低估。",
         "buy":  (False, False, False, True,  False, False, True,  False, False, False),
@@ -46,7 +42,6 @@ STRATEGY_PRESETS = {
     },
 
     # ── 5. 超賣反彈 b6+b7 / s2+s5 ─────────────────────────────────
-    # 🟡 WF OOS +6.33%｜延伸 +11.41% (16 筆, 81% 勝率)｜樣本太小
     "📉 超賣反彈（oversold bounce）": {
         "desc": "RSI超賣+MACD金叉買入，超買賣出。WF OOS +6.33%，延伸 +11.41%但僅16筆，樣本過小需更多驗證。",
         "buy":  (False, False, False, False, False, True,  True,  False, False, False),
@@ -54,7 +49,6 @@ STRATEGY_PRESETS = {
     },
 
     # ── 6. 量化確認 b1+b2+b8 ──────────────────────────────────────
-    # ✅ WF OOS +0.97%｜延伸 +8.60% (31 筆, 74% 勝率)｜WF 大幅低估
     "📊 量化確認（quant confirm）": {
         "desc": "突破放量+MA5金叉+趨勢確認三重確認。WF OOS +0.97%，延伸 +8.60%（74%勝率），WF嚴重低估策略價值。",
         "buy":  (True,  True,  False, False, False, False, False, True,  False, False),
@@ -62,7 +56,6 @@ STRATEGY_PRESETS = {
     },
 
     # ── 7. 均值回歸 b5+b6 / s2+s5 ─────────────────────────────────
-    # ⚠️ WF OOS +10.33%｜延伸僅 +3.81% (696 筆, 59% 勝率)｜疑似 survivorship bias
     "📈 均值回歸（mean reversion）": {
         "desc": "布林下軌+RSI超賣買入，超買出場。⚠️ WF OOS +10.33%但延伸僅 +3.81%，疑似survivorship bias，實際僅中等策略。",
         "buy":  (False, False, False, False, True,  True,  False, False, False, False),
@@ -70,7 +63,6 @@ STRATEGY_PRESETS = {
     },
 
     # ── 8. 均值回歸長持 b5+b6 / s6 ───────────────────────────────
-    # ✅✅ WF OOS +3.26%｜延伸 +13.75% (497 筆, 66.8% 勝率)｜最強策略之一
     "🔄 均值回歸長持（mean reversion long）": {
         "desc": "布林下軌+RSI超賣買入，MACD死叉出場。WF OOS +3.26%，延伸 +13.75%（66.8%勝率）。耐心出場捕捉完整波段。",
         "buy":  (False, False, False, False, True,  True,  False, False, False, False),
@@ -78,18 +70,14 @@ STRATEGY_PRESETS = {
     },
 
     # ── 9. 純粹均值回歸 b6 / s6 ───────────────────────────────────
-    # ✅✅✅ WF OOS +4.91%｜延伸 +12.55% (1331 筆, 65.9% 勝率)｜新王者
-    # 相比 b5+b6/s6，樣本多2.7倍，WF本身也更高。同時間有更多進場機會。
     "💎 純粹均值回歸（pure mean reversion）": {
         "desc": "RSI超賣買入，MACD死叉出場。WF最強：OOS +4.91%，延伸 +12.55%（65.9%勝率），1331筆大樣本。比b5+b6/s6進場頻率高2.7倍。",
         "buy":  (False, False, False, False, False, True,  False, False, False, False),
         "sell": (False, False, False, False, False, True,  False),
     },
 
-    # ── 10. 突破確認長持（過濾假突破）b1+b8 / s6 + min_hold=30 ────
-    # 🔬 實驗：原生 b1+b8/s6 WF -0.70% 但延伸 +5.72%（65%勝率）
-    # 診斷：14天內死叉多為假突破虧損單；長期死叉多為真趨勢賺錢單
-    # 加入 min_hold_days=30 過濾快死叉 → 預期 WF 轉正
+    # ── 10. 突破確認長持 MIN30 b1+b8 / s6 ────────────────────────
+    # ✅ WF OOS +6.20%｜延伸 +3.82% (1207 筆, 49% 勝率)｜MIN30 假設驗證成功
     "⚡+ 突破確認長持（breakout long, MIN30）": {
         "desc": "突破放量+趨勢確認，MACD死叉出場，最少持倉30天過濾假突破。WF OOS +6.20%（-105.6%退化率優），延伸+3.82%，55天持倉。min_hold_days驗證：30天前死叉=假突破，30天後才是真趨勢。",
         "buy":  (True,  False, False, False, False, False, False, True,  False, False),
@@ -98,20 +86,15 @@ STRATEGY_PRESETS = {
     },
 
     # ── 11. 底部形態 + MACD死叉出場 b4+b7 / s6 ────────────────────
-    # ✅ WF OOS +1.84%｜退化率 -141.8%（優）｜延伸 +10.67% (64 筆, 73.4% 勝率)｜21 天持倉
-    # 原版 b4+b7/s1+s6 的 s1（頭部破MA20）無貢獻，純 s6 更乾淨
+    # ✅ WF OOS +1.84%｜退化率 -141.8%（優）｜延伸 +10.67% (64 筆, 73.4% 勝率)
     "🏗️s6 底部形態死叉出（bottom+s6）": {
         "desc": "底部突破MA20+MACD金叉，MACD死叉出場。WF OOS +1.84%，退化率-141.8%（優），延伸+10.67%（73.4%勝率）。比s1+s6版本更乾淨，s1無貢獻。",
         "buy":  (False, False, False, True,  False, False, True,  False, False, False),
-        #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
         "sell": (False, False, False, False, False, True,  False),
-        #        s1     s2     s3     s4     s5     s6     s7
     },
-
 
     # ── 12. 突破確認 MIN20 b1+b8 / s1+s4 ─────────────────────────
     # 🔬 實驗：原版 b1+b8/s1+s4 WF +1.21%，延伸 +7.11%（59%勝率），持倉 14 天
-    # 持倉短 → 快出場多為假突破；加 min_hold_days=20 過濾
     "⚡M20 突破確認MIN20（breakout MIN20）": {
         "desc": "突破放量+趨勢確認，破MA20或放量急跌出場，最少持倉20天。原版WF +1.21%但持倉僅14天，延伸+7.11%（59%勝率），加MIN20過濾快出場的假突破。",
         "buy":  (True,  False, False, False, False, False, False, True,  False, False),
@@ -121,14 +104,12 @@ STRATEGY_PRESETS = {
 
     # ── 13. MACD金叉死叉週期 b7 / s6 ─────────────────────────────
     # 🔬 實驗：原版 b7/s6 WF +0.22%，延伸 +8.31%（77.8%勝率），持倉 15 天
-    # 加 min_hold_days=20 過濾 MACD 假金叉（金叉後快速死叉 = 假訊號）
     "🔄M20 MACD週期MIN20（macd cycle MIN20）": {
         "desc": "MACD金叉入場，MACD死叉出場，最少持倉20天。原版WF +0.22%但持倉僅15天，延伸+8.31%（77.8%勝率），加MIN20過濾15天內的快速假金叉。",
         "buy":  (False, False, False, False, False, False, True,  False, False, False),
         "sell": (False, False, False, False, False, True,  False),
         "min_hold_days": 20,
     },
-
 
 }
 
@@ -155,37 +136,4 @@ TV_HEADERS = {
     "Content-Type": "application/json",
     "Origin":  "https://www.tradingview.com",
     "Referer": "https://www.tradingview.com/",
-    # ── 11. 底部形態 + MACD死叉出場 b4+b7 / s6 ────────────────────
-    # ✅ WF OOS +1.84%｜退化率 -141.8%（優）｜延伸 +10.67% (64 筆, 73.4% 勝率)｜21 天持倉
-    # 原版 b4+b7/s1+s6 的 s1（頭部破MA20）無貢獻，純 s6 更乾淨
-    "🏗️s6 底部形態死叉出（bottom+s6）": {
-        "desc": "底部突破MA20+MACD金叉，MACD死叉出場。WF OOS +1.84%，退化率-141.8%（優），延伸+10.67%（73.4%勝率）。比s1+s6版本更乾淨，s1無貢獻。",
-        "buy":  (False, False, False, True,  False, False, True,  False, False, False),
-        #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
-        "sell": (False, False, False, False, False, True,  False),
-        #        s1     s2     s3     s4     s5     s6     s7
-    },
-
-
-    # ── 12. 突破確認 MIN20 b1+b8 / s1+s4 ─────────────────────────
-    # 🔬 實驗：原版 b1+b8/s1+s4 WF +1.21%，延伸 +7.11%（59%勝率），持倉 14 天
-    # 持倉短 → 快出場多為假突破；加 min_hold_days=20 過濾
-    "⚡M20 突破確認MIN20（breakout MIN20）": {
-        "desc": "突破放量+趨勢確認，破MA20或放量急跌出場，最少持倉20天。原版WF +1.21%但持倉僅14天，延伸+7.11%（59%勝率），加MIN20過濾快出場的假突破。",
-        "buy":  (True,  False, False, False, False, False, False, True,  False, False),
-        "sell": (True,  False, False, True,  False, False, False),
-        "min_hold_days": 20,
-    },
-
-    # ── 13. MACD金叉死叉週期 b7 / s6 ─────────────────────────────
-    # 🔬 實驗：原版 b7/s6 WF +0.22%，延伸 +8.31%（77.8%勝率），持倉 15 天
-    # 加 min_hold_days=20 過濾 MACD 假金叉（金叉後快速死叉 = 假訊號）
-    "🔄M20 MACD週期MIN20（macd cycle MIN20）": {
-        "desc": "MACD金叉入場，MACD死叉出場，最少持倉20天。原版WF +0.22%但持倉僅15天，延伸+8.31%（77.8%勝率），加MIN20過濾15天內的快速假金叉。",
-        "buy":  (False, False, False, False, False, False, True,  False, False, False),
-        "sell": (False, False, False, False, False, True,  False),
-        "min_hold_days": 20,
-    },
-
-
 }
