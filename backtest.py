@@ -16,6 +16,12 @@ def run_backtest(
     stop_loss_pct: float = None,
     take_profit_pct: float = None,
     max_hold_days: int = None,
+    # ── min_hold_days：最小持倉天數（過濾快死叉的假突破）─────────
+    # 在達到 min_hold_days 之前，只允許止損 / 止盈出場，策略 sell 訊號被凍結。
+    # 目的：例如 b1+b8/s6 進場後若 14 天內 MACD 死叉，多數是假突破；
+    #       強制持有 30 天才開放策略出場，可過濾假訊號。
+    # 注意：單位為「交易日 bar」，與 max_hold_days 一致；30 ≈ 6 週實盤。
+    min_hold_days: int = None,
     _precomputed: dict = None,
     # ── 改進二：恒指市場過濾器 ─────────────────────────────────────
     # pd.Series[bool]，index 為交易日，True = 恒指 MA20 > MA60（牛市）
@@ -35,8 +41,6 @@ def run_backtest(
         buy_signal = pd.Series(False, index=df.index)
 
     # ── 改進二：把恒指過濾器疊加到 buy_signal ─────────────────────
-    # 用 reindex + ffill 對齊日期（HSI 和個股的交易日可能略有不同）
-    # 未對齊的日期 fillna(True) — 寧可放行，不誤殺
     if market_filter_series is not None and not market_filter_series.empty:
         hsi_aligned = (
             market_filter_series
@@ -91,6 +95,12 @@ def run_backtest(
             reason    = None
             exit_px   = close
 
+            # ── min_hold_days 守衛：未滿最小持倉時凍結策略 sell ────
+            # 止損 / 止盈 / 超時 不受影響（風控優先）
+            strategy_sell_allowed = True
+            if min_hold_days and days_held < min_hold_days:
+                strategy_sell_allowed = False
+
             if stop_loss_pct and low_i <= ep * (1 - stop_loss_pct / 100):
                 exit_px = ep * (1 - stop_loss_pct / 100)
                 reason  = f"止損 -{stop_loss_pct:.0f}%"
@@ -100,7 +110,7 @@ def run_backtest(
             elif max_hold_days and days_held >= max_hold_days:
                 exit_px = close * (1 - slippage)
                 reason  = f"超時 {max_hold_days}日"
-            elif sell_arr[i]:
+            elif sell_arr[i] and strategy_sell_allowed:
                 exit_px = close * (1 - slippage)
                 reason  = "策略訊號"
 
