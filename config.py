@@ -109,6 +109,27 @@ STRATEGY_PRESETS = {
     },
 
 
+    # ── 12. 突破確認 MIN20 b1+b8 / s1+s4 ─────────────────────────
+    # 🔬 實驗：原版 b1+b8/s1+s4 WF +1.21%，延伸 +7.11%（59%勝率），持倉 14 天
+    # 持倉短 → 快出場多為假突破；加 min_hold_days=20 過濾
+    "⚡M20 突破確認MIN20（breakout MIN20）": {
+        "desc": "突破放量+趨勢確認，破MA20或放量急跌出場，最少持倉20天。原版WF +1.21%但持倉僅14天，延伸+7.11%（59%勝率），加MIN20過濾快出場的假突破。",
+        "buy":  (True,  False, False, False, False, False, False, True,  False, False),
+        "sell": (True,  False, False, True,  False, False, False),
+        "min_hold_days": 20,
+    },
+
+    # ── 13. MACD金叉死叉週期 b7 / s6 ─────────────────────────────
+    # 🔬 實驗：原版 b7/s6 WF +0.22%，延伸 +8.31%（77.8%勝率），持倉 15 天
+    # 加 min_hold_days=20 過濾 MACD 假金叉（金叉後快速死叉 = 假訊號）
+    "🔄M20 MACD週期MIN20（macd cycle MIN20）": {
+        "desc": "MACD金叉入場，MACD死叉出場，最少持倉20天。原版WF +0.22%但持倉僅15天，延伸+8.31%（77.8%勝率），加MIN20過濾15天內的快速假金叉。",
+        "buy":  (False, False, False, False, False, False, True,  False, False, False),
+        "sell": (False, False, False, False, False, True,  False),
+        "min_hold_days": 20,
+    },
+
+
 }
 
 PRESET_NAMES  = ["✏️ 自定義"] + list(STRATEGY_PRESETS.keys())
@@ -143,6 +164,27 @@ TV_HEADERS = {
         #        b1     b2     b3     b4     b5     b6     b7     b8     b9     b10
         "sell": (False, False, False, False, False, True,  False),
         #        s1     s2     s3     s4     s5     s6     s7
+    },
+
+
+    # ── 12. 突破確認 MIN20 b1+b8 / s1+s4 ─────────────────────────
+    # 🔬 實驗：原版 b1+b8/s1+s4 WF +1.21%，延伸 +7.11%（59%勝率），持倉 14 天
+    # 持倉短 → 快出場多為假突破；加 min_hold_days=20 過濾
+    "⚡M20 突破確認MIN20（breakout MIN20）": {
+        "desc": "突破放量+趨勢確認，破MA20或放量急跌出場，最少持倉20天。原版WF +1.21%但持倉僅14天，延伸+7.11%（59%勝率），加MIN20過濾快出場的假突破。",
+        "buy":  (True,  False, False, False, False, False, False, True,  False, False),
+        "sell": (True,  False, False, True,  False, False, False),
+        "min_hold_days": 20,
+    },
+
+    # ── 13. MACD金叉死叉週期 b7 / s6 ─────────────────────────────
+    # 🔬 實驗：原版 b7/s6 WF +0.22%，延伸 +8.31%（77.8%勝率），持倉 15 天
+    # 加 min_hold_days=20 過濾 MACD 假金叉（金叉後快速死叉 = 假訊號）
+    "🔄M20 MACD週期MIN20（macd cycle MIN20）": {
+        "desc": "MACD金叉入場，MACD死叉出場，最少持倉20天。原版WF +0.22%但持倉僅15天，延伸+8.31%（77.8%勝率），加MIN20過濾15天內的快速假金叉。",
+        "buy":  (False, False, False, False, False, False, True,  False, False, False),
+        "sell": (False, False, False, False, False, True,  False),
+        "min_hold_days": 20,
     },
 
 
