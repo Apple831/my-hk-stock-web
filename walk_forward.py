@@ -513,8 +513,9 @@ def show_walk_forward_results(wf_results: list, trade_size: float, is_portfolio:
             wr        = ext_summary_all.get("win_rate", 0)
             avg_days  = ext_summary_all.get("avg_days", 0)
             sign      = "+" if avg >= 0 else ""
+            # 用 markdown 換行（兩個空格 + \n）和 **bold**，而非 <br> 和 <b>
             ext_text = (
-                f"<br>🔍 <b>延伸追蹤</b>：{closed} 筆已觸發真實出場"
+                f"  \n🔍 **延伸追蹤**：{closed} 筆已觸發真實出場"
                 f"（平均 {sign}{avg:.2f}%，勝率 {wr:.1f}%，平均持倉 {avg_days:.0f} 天）"
             )
             if still > 0:
