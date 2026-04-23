@@ -114,6 +114,27 @@ STRATEGY_PRESETS = {
     },
 
 
+    # ── 14. MA5金叉+趨勢確認 MIN30 b2+b8 / s6 ────────────────────
+    # 🔬 實驗：類似 ⚡+（突破+趨勢），但用 MA5 金叉取代突破放量
+    # 假設：MA5 金叉較溫和，MIN30 過濾後可能捕捉較早期趨勢起點
+    "📊M30 MA5金叉MIN30（ma5 cross MIN30）": {
+        "desc": "MA5金叉MA20+趨勢確認，MACD死叉出場，最少持倉30天。實驗策略：類似⚡+但用MA5金叉取代突破，MIN30過濾假金叉，捕捉較早期趨勢起點。",
+        "buy":  (False, True,  False, False, False, False, False, True,  False, False),
+        "sell": (False, False, False, False, False, True,  False),
+        "min_hold_days": 30,
+    },
+
+    # ── 15. MACD金叉+趨勢確認 MIN30 b7+b8 / s6 ───────────────────
+    # 🔬 實驗：🔄M30（+4.60%）加趨勢過濾
+    # 假設：b8 能排除下降趨勢中的 MACD 金叉（通常是反彈而非反轉）
+    "🔄+ MACD+趨勢MIN30（macd+trend MIN30）": {
+        "desc": "MACD金叉+趨勢確認，MACD死叉出場，最少持倉30天。實驗策略：🔄M30(+4.60%)加b8過濾，排除下降趨勢中的假金叉（反彈而非反轉）。",
+        "buy":  (False, False, False, False, False, False, True,  True,  False, False),
+        "sell": (False, False, False, False, False, True,  False),
+        "min_hold_days": 30,
+    },
+
+
 }
 
 PRESET_NAMES  = ["✏️ 自定義"] + list(STRATEGY_PRESETS.keys())
