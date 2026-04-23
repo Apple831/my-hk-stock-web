@@ -135,6 +135,27 @@ STRATEGY_PRESETS = {
     },
 
 
+    # ── 16. 突破+MA5+趨勢 MIN30 b1+b2+b8 / s6 ────────────────────
+    # 🔬 實驗：📊M30 (b2+b8/s6) +2.94% vs ⚡+ (b1+b8/s6) +6.20%
+    # 假設：把 b1+b2 同時要求可進一步過濾假突破（突破且 MA5 剛轉強才進場）
+    "⚡📊M30 突破+MA5+趨勢 MIN30": {
+        "desc": "突破放量+MA5金叉+趨勢確認，MACD死叉出場，最少持倉30天。實驗：結合⚡+與📊M30的雙重確認，預期比單用b1更嚴格。",
+        "buy":  (True,  True,  False, False, False, False, False, True,  False, False),
+        "sell": (False, False, False, False, False, True,  False),
+        "min_hold_days": 30,
+    },
+
+    # ── 17. MACD+趨勢 MIN45 b7+b8 / s6 ───────────────────────────
+    # 🔬 實驗：🔄+ MIN30 +4.80%，測試 MIN45 看是否過擬合或再提升
+    # 如果 MIN45 ≈ MIN30，代表 30 已是最優；若 MIN45 更高，港股週期可能更長
+    "🔄+M45 MACD+趨勢 MIN45": {
+        "desc": "MACD金叉+趨勢確認，MACD死叉出場，最少持倉45天。實驗：🔄+ MIN30版本+4.80%，測MIN45邊界。若不變則MIN30已最優，若更高則港股MACD週期實際更長。",
+        "buy":  (False, False, False, False, False, False, True,  True,  False, False),
+        "sell": (False, False, False, False, False, True,  False),
+        "min_hold_days": 45,
+    },
+
+
 }
 
 PRESET_NAMES  = ["✏️ 自定義"] + list(STRATEGY_PRESETS.keys())
