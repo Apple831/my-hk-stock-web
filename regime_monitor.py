@@ -6,14 +6,12 @@ Sidebar 常駐顯示當前市場制度、持續天數、上次切換時間。
 
 使用方式：
     from regime_monitor import render_regime_sidebar
-    # 在 app.py 的 sidebar 區塊最上方呼叫
-    render_regime_sidebar()
+    render_regime_sidebar()  # 在 app.py 的 sidebar 之前呼叫
 """
 from __future__ import annotations
 
 import pandas as pd
 import numpy as np
-import yfinance as yf
 import streamlit as st
 
 
@@ -34,20 +32,15 @@ REGIME_STYLES = {
 
 
 # ---------------------------------------------------------------------------
-# 資料下載 & 指標計算
+# 資料下載（沿用 data.py 的 get_stock_data，內建 ^HSI → 2800.HK fallback）
 # ---------------------------------------------------------------------------
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def _download_hsi(period: str = "2y") -> pd.DataFrame:
-    """下載恒指日線資料（快取 1 小時）"""
+    """透過 data.get_stock_data 下載恒指，享用其 fallback 與 10 分鐘快取"""
     try:
-        df = yf.download("^HSI", period=period, progress=False, auto_adjust=False)
-        if df is None or df.empty:
-            return pd.DataFrame()
-        # 處理新版 yfinance 的 MultiIndex 欄位
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        return df
+        from data import get_stock_data
+        df = get_stock_data("^HSI", period=period)
+        return df if df is not None and not df.empty else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
 
@@ -66,7 +59,7 @@ def _compute_macd_hist(close: pd.Series, fast: int = 12, slow: int = 26,
 # 制度判定
 # ---------------------------------------------------------------------------
 
-def _classify_regime(gap_pct: float, macd_pct: float, cov_20: float) -> str | None:
+def _classify_regime(gap_pct: float, macd_pct: float, cov_20: float):
     """依三層制度規則給出標籤（NaN 則回傳 None）"""
     if pd.isna(gap_pct) or pd.isna(macd_pct) or pd.isna(cov_20):
         return None
@@ -160,7 +153,7 @@ def render_regime_sidebar() -> None:
         hsi = _download_hsi("2y")
         if hsi.empty:
             st.warning("無法取得恒指資料")
-            st.caption("重試：點選 Rerun 或稍後再試")
+            st.caption("稍後再試或重啟 app")
             return
 
         info = get_current_regime_info(hsi)
