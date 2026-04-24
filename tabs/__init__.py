@@ -8,4 +8,5 @@ from . import (
     tab_backtest,
     tab_walkforward,
     tab_regime_matrix,
+    tab_multi_scan,
 )
