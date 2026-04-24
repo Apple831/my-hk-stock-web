@@ -135,6 +135,103 @@ STRATEGY_PRESETS = {
     },
 
 
+    # ══════════════════════════════════════════════════════════════
+    # 🔬 新一輪實驗策略（待驗證）
+    # ══════════════════════════════════════════════════════════════
+
+    # ── 16. 💎M30 純粹均值回歸 MIN30 b6/s6 ───────────────────────
+    # 原版 💎 b6/s6 已是 WF +4.91%，加 MIN30 預期衝擊策略池冠軍
+    "💎M30 純粹均值回歸MIN30": {
+        "desc": "RSI超賣買入，MACD死叉出場，最少持倉30天。原版💎 WF +4.91%（1331筆大樣本），加MIN30預期直接衝擊策略池冠軍。",
+        "buy":  (False, False, False, False, False, True,  False, False, False, False),
+        "sell": (False, False, False, False, False, True,  False),
+        "min_hold_days": 30,
+    },
+
+    # ── 17. 💎M20 純粹均值回歸 MIN20 b6/s6 ───────────────────────
+    # 較溫和版本，看 MIN20 是否已足夠
+    "💎M20 純粹均值回歸MIN20": {
+        "desc": "RSI超賣買入，MACD死叉出場，最少持倉20天。對照💎M30測試MIN參數敏感度。",
+        "buy":  (False, False, False, False, False, True,  False, False, False, False),
+        "sell": (False, False, False, False, False, True,  False),
+        "min_hold_days": 20,
+    },
+
+    # ── 18. 🔄M30 均值回歸長持 MIN30 b5+b6/s6 ────────────────────
+    # 原版 🔄 b5+b6/s6 WF +3.26%，加 MIN30
+    "🔄🔄M30 均值回歸長持MIN30": {
+        "desc": "布林下軌+RSI超賣買入，MACD死叉出場，最少持倉30天。原版🔄 WF +3.26%，加MIN30看是否推高。",
+        "buy":  (False, False, False, False, True,  True,  False, False, False, False),
+        "sell": (False, False, False, False, False, True,  False),
+        "min_hold_days": 30,
+    },
+
+    # ── 19. 🏗️M30 底部形態MIN30 b4+b7/s6 ───────────────────────
+    # 原版 🏗️s6 b4+b7/s6 WF +1.84%，加 MIN30
+    "🏗️M30 底部形態MIN30": {
+        "desc": "底部突破MA20+MACD金叉，MACD死叉出場，最少持倉30天。原版🏗️s6 WF +1.84%（73.4%勝率），加MIN30測試。",
+        "buy":  (False, False, False, True,  False, False, True,  False, False, False),
+        "sell": (False, False, False, False, False, True,  False),
+        "min_hold_days": 30,
+    },
+
+    # ── 20. 🔥M30 趨勢動能MIN30 b1+b8+b9/s6 ─────────────────────
+    # 原版 🔥 b1+b8+b9 WF -0.06% 原生虧損，但延伸+6.76% 顯示有潛力
+    # 加 MIN30 + s6（與 ⚡+ 同出場邏輯）看能否救回來
+    "🔥M30 趨勢動能MIN30": {
+        "desc": "突破+趨勢+52週新高，MACD死叉出場，最少持倉30天。原版🔥 WF-0.06%但延伸+6.76%，加MIN30+s6看能否救回。",
+        "buy":  (True,  False, False, False, False, False, False, True,  True,  False),
+        "sell": (False, False, False, False, False, True,  False),
+        "min_hold_days": 30,
+    },
+
+    # ── 21. 底背離 b3+b8/s6 MIN30 ─────────────────────────────────
+    # b3（底背離）從未進過策略池，最接近價值投資概念
+    "🎪M30 底背離+趨勢MIN30": {
+        "desc": "底背離+趨勢確認，MACD死叉出場，最少持倉30天。b3從未進過策略池，最接近價值投資概念。",
+        "buy":  (False, False, True,  False, False, False, False, True,  False, False),
+        "sell": (False, False, False, False, False, True,  False),
+        "min_hold_days": 30,
+    },
+
+    # ══════════════════════════════════════════════════════════════
+    # 🆕 無 MIN 的新組合實驗（測試純進出場邏輯）
+    # ══════════════════════════════════════════════════════════════
+
+    # ── 22. 雙重均值回歸 b5+b6/s2+s6（無 MIN）─────────────────────
+    # 原版 b5+b6/s2+s5 有 survivorship bias，改成 s2+s6 看是否更紮實
+    "📈🔄 布林RSI雙出（b5+b6/s2+s6）": {
+        "desc": "布林下軌+RSI超賣買入，布林上軌或MACD死叉出場。混合快慢出場策略，對照原版b5+b6/s2+s5（有bias）。",
+        "buy":  (False, False, False, False, True,  True,  False, False, False, False),
+        "sell": (False, True,  False, False, False, True,  False),
+    },
+
+    # ── 23. MACD金叉+突破 b1+b7（無 b8/無 MIN）─────────────────────
+    # 突破且同時 MACD 金叉，雙訊號確認但不要 b8 趨勢過濾
+    "⚡🔄 突破+MACD金叉（b1+b7/s1+s6）": {
+        "desc": "突破放量+MACD金叉買入，破MA20或MACD死叉出場。不要b8趨勢過濾，看純雙訊號確認是否足夠。",
+        "buy":  (True,  False, False, False, False, False, True,  False, False, False),
+        "sell": (True,  False, False, False, False, True,  False),
+    },
+
+    # ── 24. 純 MACD 週期策略 b7/s6（無 MIN）─────────────────────────
+    # 🔄M30 是 +4.60%，看看純無過濾的 b7/s6 原始表現作對照基準
+    "🔄基準 純MACD週期（b7/s6）": {
+        "desc": "純MACD金叉入場，MACD死叉出場。對照🔄M30(+4.60%)的基準，看MIN30到底幫多少。",
+        "buy":  (False, False, False, False, False, False, True,  False, False, False),
+        "sell": (False, False, False, False, False, True,  False),
+    },
+
+    # ── 25. 底部 + 均值回歸 b4+b6/s6 MIN30 ────────────────────────
+    # 結合底部形態與 RSI 超賣，兩種底部訊號重合
+    "🏗️💎M30 底部+超賣MIN30": {
+        "desc": "底部突破MA20+RSI超賣買入，MACD死叉出場，最少持倉30天。兩種底部訊號同時要求，預期樣本少但精度高。",
+        "buy":  (False, False, False, True,  False, True,  False, False, False, False),
+        "sell": (False, False, False, False, False, True,  False),
+        "min_hold_days": 30,
+    },
+
+
 }
 
 PRESET_NAMES  = ["✏️ 自定義"] + list(STRATEGY_PRESETS.keys())
