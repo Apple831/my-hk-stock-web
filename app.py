@@ -23,6 +23,9 @@ from tabs import (
 # Sidebar
 # ══════════════════════════════════════════════════════════════════
 with st.sidebar:
+    from regime_monitor import render_regime_sidebar
+    render_regime_sidebar()
+    
     st.markdown("### ⚙️ 數據控制台")
     n_stocks = len(st.session_state.get("stocks", []))
     st.caption(f"股票清單：{n_stocks or '讀取中'} 隻")
