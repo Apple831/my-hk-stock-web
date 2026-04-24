@@ -15,9 +15,9 @@ from data import (
 from tabs import (
     tab_index, tab_beat, tab_buy_scan,
     tab_sell_scan, tab_analysis, tab_backtest,
-    tab_walkforward,
+    tab_walkforward, tab_regime_matrix,
+    tab_multi_scan,
 )
-from tabs import tab_regime_matrix
 
 # ══════════════════════════════════════════════════════════════════
 # Sidebar
@@ -93,7 +93,8 @@ st.title("🏹 港股狙擊手 V12.0")
 
 tabs = st.tabs([
     "🌍 指數", "🏆 跑贏大市", "🟢 買入掃描", "🔴 賣出掃描",
-    "🔍 分析", "📊 回測", "🔬 Walk-Forward", "🗺️ 制度矩陣",
+    "📡 共振掃描", "🔍 分析", "📊 回測",
+    "🔬 Walk-Forward", "🗺️ 制度矩陣",
 ])
 
 with tabs[0]:
@@ -105,10 +106,12 @@ with tabs[2]:
 with tabs[3]:
     tab_sell_scan.render(STOCKS)
 with tabs[4]:
-    tab_analysis.render()
+    tab_multi_scan.render(STOCKS)
 with tabs[5]:
-    tab_backtest.render(STOCKS)
+    tab_analysis.render()
 with tabs[6]:
-    tab_walkforward.render(STOCKS)
+    tab_backtest.render(STOCKS)
 with tabs[7]:
+    tab_walkforward.render(STOCKS)
+with tabs[8]:
     tab_regime_matrix.render(STOCKS)
