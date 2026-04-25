@@ -106,6 +106,11 @@ def precompute_signals(df: pd.DataFrame, hsi_bullish: bool = True) -> dict:
     low_volume = c["Volume"] < vol_ma * 0.8
     b10 = in_uptrend & near_ma20 & low_volume
 
+    # ── b11: KDJ 超賣金叉（本次新增）──────────────────────────
+    # K, D 都在 20 以下（深度超賣）+ K 上穿 D（金叉）
+    # 比 b6 (RSI<30) 更嚴格，預期樣本較少但精度更高
+    b11 = (c["K"] < 20) & (c["D"] < 20) & (c["K"] > c["D"]) & (p["K"] <= p["D"])
+
     # ── 賣出訊號 ──────────────────────────────────────────────────
     close_ma10u = df["Close"].rolling(10).mean().shift(1)
     ma60_ma10u  = df["MA60"].rolling(10).mean().shift(1)
@@ -133,6 +138,11 @@ def precompute_signals(df: pd.DataFrame, hsi_bullish: bool = True) -> dict:
     )
     s7 = three_red & (c["Close"] < c["MA20"])
 
+    # ── s8: KDJ 高位死叉（本次新增）──────────────────────────
+    # K, D 都在 80 以上（深度超買）+ K 下穿 D（死叉）
+    # 對應 b11，給 💎M30 系列一個 s6+s8 雙出場選項
+    s8 = (c["K"] > 80) & (c["D"] > 80) & (c["K"] < c["D"]) & (p["K"] >= p["D"])
+
     # 前61行 mask
     mask = pd.Series(False, index=df.index)
     mask.iloc[:61] = True
@@ -140,7 +150,8 @@ def precompute_signals(df: pd.DataFrame, hsi_bullish: bool = True) -> dict:
     sigs = {}
     for name, s in [("b1",b1),("b2",b2),("b3",b3),("b4",b4),("b5",b5),
                     ("b6",b6),("b7",b7),("b8",b8),("b9",b9),("b10",b10),
+                    ("b11",b11),
                     ("s1",s1),("s2",s2),("s3",s3),("s4",s4),
-                    ("s5",s5),("s6",s6),("s7",s7)]:
+                    ("s5",s5),("s6",s6),("s7",s7),("s8",s8)]:
         sigs[name] = s.fillna(False) & ~mask
     return sigs
