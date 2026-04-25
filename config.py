@@ -2,235 +2,141 @@
 # config.py — 策略組合預設 & 全局常量
 # ══════════════════════════════════════════════════════════════════
 #
+# v13 更新（2026-04-25）：
+# • 新增 b11（KDJ超賣金叉）、s8（KDJ高位死叉）兩個訊號
+# • 策略池從 25 個精簡到 14 個：5 實盤 + 5 診斷 + 4 KDJ 新實驗
+# • 已移除確認 survivorship bias 或表現平庸的策略
+#
 # 每個策略 dict 欄位：
 #   desc           - UI 顯示的策略說明
-#   buy            - 10 個買入信號的 tuple (b1~b10)
-#   sell           - 7 個賣出信號的 tuple (s1~s7)
-#   min_hold_days  - (可選) 策略級最小持倉天數，過濾快死叉的假突破
+#   buy            - 11 個買入信號的 tuple (b1~b11)
+#   sell           - 8 個賣出信號的 tuple (s1~s8)
+#   min_hold_days  - (可選) 策略級最小持倉天數
 #
-# buy  tuple 順序：b1  b2  b3  b4  b5  b6  b7  b8  b9  b10
-# sell tuple 順序：s1  s2  s3  s4  s5  s6  s7
+# buy  tuple 順序：b1  b2  b3  b4  b5  b6  b7  b8  b9  b10  b11
+# sell tuple 順序：s1  s2  s3  s4  s5  s6  s7  s8
 
 STRATEGY_PRESETS = {
 
-    # ── 1. 趨勢動能 b1+b8+b9 ─────────────────────────────────────
-    "🔥 趨勢動能（momentum）": {
-        "desc": "突破放量+趨勢確認+52週新高。WF OOS -0.06%（原生虧損），延伸追蹤 +6.76%。原版不建議實盤。",
-        "buy":  (True,  False, False, False, False, False, False, True,  True,  False),
-        "sell": (True,  False, False, True,  False, False, False),
-    },
-
-    # ── 2. 趨勢回調低吸 b8+b10 ───────────────────────────────────
-    "🎯 趨勢回調低吸（pullback）": {
-        "desc": "上升趨勢中縮量回調至MA20再進場。WF OOS +1.14%，延伸 +2.52%，1571筆大樣本，穩健但回報偏低。",
-        "buy":  (False, False, False, False, False, False, False, True,  False, True),
-        "sell": (True,  False, False, False, False, True,  False),
-    },
-
-    # ── 3. 突破確認 b1+b8 ─────────────────────────────────────────
-    "⚡ 突破確認（breakout）": {
-        "desc": "突破放量+趨勢確認。WF OOS +1.21%，延伸 +7.11%（59%勝率），WF被大幅低估。制度矩陣：震盪/轉折市+4%。",
-        "buy":  (True,  False, False, False, False, False, False, True,  False, False),
-        "sell": (True,  False, False, True,  False, False, False),
-    },
-
-    # ── 4. 底部形態完成 b4+b7 / s1+s6 ─────────────────────────────
-    "🏗️ 底部形態完成（bottom）": {
-        "desc": "底部突破MA20+MACD金叉，破MA20或MACD死叉出場。WF OOS +1.63%，延伸 +9.67%（70.5%勝率），被嚴重低估。",
-        "buy":  (False, False, False, True,  False, False, True,  False, False, False),
-        "sell": (True,  False, False, False, False, True,  False),
-    },
-
-    # ── 5. 超賣反彈 b6+b7 / s2+s5 ─────────────────────────────────
-    "📉 超賣反彈（oversold bounce）": {
-        "desc": "RSI超賣+MACD金叉買入，超買賣出。WF OOS +6.33%，延伸 +11.41%但僅16筆，樣本過小需更多驗證。",
-        "buy":  (False, False, False, False, False, True,  True,  False, False, False),
-        "sell": (False, True,  False, False, True,  False, False),
-    },
-
-    # ── 6. 量化確認 b1+b2+b8 ──────────────────────────────────────
-    "📊 量化確認（quant confirm）": {
-        "desc": "突破放量+MA5金叉+趨勢確認三重確認。WF OOS +0.97%，延伸 +8.60%（74%勝率），WF嚴重低估策略價值。",
-        "buy":  (True,  True,  False, False, False, False, False, True,  False, False),
-        "sell": (True,  False, False, True,  False, False, False),
-    },
-
-    # ── 7. 均值回歸 b5+b6 / s2+s5 ─────────────────────────────────
-    "📈 均值回歸（mean reversion）": {
-        "desc": "布林下軌+RSI超賣買入，超買出場。⚠️ WF OOS +10.33%但延伸僅 +3.81%，疑似survivorship bias，實際僅中等策略。",
-        "buy":  (False, False, False, False, True,  True,  False, False, False, False),
-        "sell": (False, True,  False, False, True,  False, False),
-    },
-
-    # ── 8. 均值回歸長持 b5+b6 / s6 ───────────────────────────────
-    "🔄 均值回歸長持（mean reversion long）": {
-        "desc": "布林下軌+RSI超賣買入，MACD死叉出場。WF OOS +3.26%，延伸 +13.75%（66.8%勝率）。耐心出場捕捉完整波段。",
-        "buy":  (False, False, False, False, True,  True,  False, False, False, False),
-        "sell": (False, False, False, False, False, True,  False),
-    },
-
-    # ── 9. 純粹均值回歸 b6 / s6 ───────────────────────────────────
-    "💎 純粹均值回歸（pure mean reversion）": {
-        "desc": "RSI超賣買入，MACD死叉出場。WF最強：OOS +4.91%，延伸 +12.55%（65.9%勝率），1331筆大樣本。比b5+b6/s6進場頻率高2.7倍。",
-        "buy":  (False, False, False, False, False, True,  False, False, False, False),
-        "sell": (False, False, False, False, False, True,  False),
-    },
-
-    # ── 10. 突破確認長持 MIN30 b1+b8 / s6 ────────────────────────
-    # ✅ WF OOS +6.20%｜延伸 +3.82% (1207 筆, 49% 勝率)｜MIN30 假設驗證成功
-    "⚡+ 突破確認長持（breakout long, MIN30）": {
-        "desc": "突破放量+趨勢確認，MACD死叉出場，最少持倉30天過濾假突破。WF OOS +6.20%（-105.6%退化率優），延伸+3.82%，55天持倉。min_hold_days驗證：30天前死叉=假突破，30天後才是真趨勢。",
-        "buy":  (True,  False, False, False, False, False, False, True,  False, False),
-        "sell": (False, False, False, False, False, True,  False),
-        "min_hold_days": 30,
-    },
-
-    # ── 11. 底部形態 + MACD死叉出場 b4+b7 / s6 ────────────────────
-    # ✅ WF OOS +1.84%｜退化率 -141.8%（優）｜延伸 +10.67% (64 筆, 73.4% 勝率)
-    "🏗️s6 底部形態死叉出（bottom+s6）": {
-        "desc": "底部突破MA20+MACD金叉，MACD死叉出場。WF OOS +1.84%，退化率-141.8%（優），延伸+10.67%（73.4%勝率）。比s1+s6版本更乾淨，s1無貢獻。",
-        "buy":  (False, False, False, True,  False, False, True,  False, False, False),
-        "sell": (False, False, False, False, False, True,  False),
-    },
-
-    # ── 12. 突破確認 MIN30 b1+b8 / s1+s4 ─────────────────────────
-    # 🔬 實驗：⚡M20 WF +1.79%（提升有限），試 MIN30 看能否推高
-    # 對比 ⚡+ b1+b8/s6 MIN30 WF +6.20%，推測 s1+s4 較 s6 慢觸發
-    "⚡M30 突破確認MIN30（breakout MIN30）": {
-        "desc": "突破放量+趨勢確認，破MA20或放量急跌出場，最少持倉30天。WF OOS +2.95%（退化率-15.5%健康），延伸+7.88%（55.4%勝率，67天持倉）。MIN30版完勝MIN20版（+1.79%）。",
-        "buy":  (True,  False, False, False, False, False, False, True,  False, False),
-        "sell": (True,  False, False, True,  False, False, False),
-        "min_hold_days": 30,
-    },
-
-    # ── 13. MACD金叉死叉週期 MIN30 b7 / s6 ───────────────────────
-    # 🔬 實驗：🔄M20 WF +3.23%（大幅提升），試 MIN30 能否再推高
-    # MACD 金叉最易假信號，MIN20 已過濾很多，MIN30 或許捕捉更完整週期
-    "🔄M30 MACD週期MIN30（macd cycle MIN30）": {
-        "desc": "MACD金叉入場，MACD死叉出場，最少持倉30天。WF OOS +4.60%（退化率-64.5%優），延伸+4.46%（53.1%勝率，52天持倉）。MIN30版優於MIN20（+3.23%），WF與延伸吻合顯示無survivorship bias。",
-        "buy":  (False, False, False, False, False, False, True,  False, False, False),
-        "sell": (False, False, False, False, False, True,  False),
-        "min_hold_days": 30,
-    },
-
-
-    # ── 14. MA5金叉+趨勢確認 MIN30 b2+b8 / s6 ────────────────────
-    # 🔬 實驗：類似 ⚡+（突破+趨勢），但用 MA5 金叉取代突破放量
-    # 假設：MA5 金叉較溫和，MIN30 過濾後可能捕捉較早期趨勢起點
-    "📊M30 MA5金叉MIN30（ma5 cross MIN30）": {
-        "desc": "MA5金叉MA20+趨勢確認，MACD死叉出場，最少持倉30天。WF OOS +2.94%（退化率-6.0%極健康），延伸+7.71%（54.0%勝率，67天持倉）。WF被嚴重低估，延伸近⚡+水平。",
-        "buy":  (False, True,  False, False, False, False, False, True,  False, False),
-        "sell": (False, False, False, False, False, True,  False),
-        "min_hold_days": 30,
-    },
-
-    # ── 15. MACD金叉+趨勢確認 MIN30 b7+b8 / s6 ───────────────────
-    # 🔬 實驗：🔄M30（+4.60%）加趨勢過濾
-    # 假設：b8 能排除下降趨勢中的 MACD 金叉（通常是反彈而非反轉）
-    "🔄+ MACD+趨勢MIN30（macd+trend MIN30）": {
-        "desc": "MACD金叉+趨勢確認，MACD死叉出場，最少持倉30天。WF OOS +4.80%（略勝🔄M30的+4.60%），延伸+4.92%（53.8%勝率，52天持倉）。b8趨勢過濾為MACD策略加0.20%邊際價值。",
-        "buy":  (False, False, False, False, False, False, True,  True,  False, False),
-        "sell": (False, False, False, False, False, True,  False),
-        "min_hold_days": 30,
-    },
-
-
     # ══════════════════════════════════════════════════════════════
-    # 🔬 新一輪實驗策略（待驗證）
+    # 🏆 實盤候選（5 個，已驗證 alpha，可實盤使用）
     # ══════════════════════════════════════════════════════════════
 
-    # ── 16. 💎M30 純粹均值回歸 MIN30 b6/s6 ───────────────────────
-    # 原版 💎 b6/s6 已是 WF +4.91%，加 MIN30 預期衝擊策略池冠軍
+    # ── 1. 💎M30 純粹均值回歸MIN30（策略池冠軍）─────────────────
     "💎M30 純粹均值回歸MIN30": {
-        "desc": "RSI超賣買入，MACD死叉出場，最少持倉30天。原版💎 WF +4.91%（1331筆大樣本），加MIN30預期直接衝擊策略池冠軍。",
-        "buy":  (False, False, False, False, False, True,  False, False, False, False),
-        "sell": (False, False, False, False, False, True,  False),
+        "desc": "【實盤冠軍】RSI<30買入，MACD死叉出，最少持倉30天。WF +6.56% / 延伸 +15.89% / 樣本 2379 / 真實勝率 69.7%。延伸>>WF 證實有真實 alpha，無 bias。建議作為實盤主力策略。",
+        "buy":  (False, False, False, False, False, True,  False, False, False, False, False),
+        "sell": (False, False, False, False, False, True,  False, False),
         "min_hold_days": 30,
     },
 
-    # ── 17. 💎M20 純粹均值回歸 MIN20 b6/s6 ───────────────────────
-    # 較溫和版本，看 MIN20 是否已足夠
-    "💎M20 純粹均值回歸MIN20": {
-        "desc": "RSI超賣買入，MACD死叉出場，最少持倉20天。對照💎M30測試MIN參數敏感度。",
-        "buy":  (False, False, False, False, False, True,  False, False, False, False),
-        "sell": (False, False, False, False, False, True,  False),
+    # ── 2. 🔄🔄M30 均值回歸長持MIN30 ─────────────────────────────
+    "🔄🔄M30 均值回歸長持MIN30": {
+        "desc": "【實盤組合】布林下軌+RSI超賣，MACD死叉出，最少持倉30天。WF +5.42% / 延伸 +15.00% / 樣本 871。比💎M30更挑剔但同等強。可與💎M30搭配分散。",
+        "buy":  (False, False, False, False, True,  True,  False, False, False, False, False),
+        "sell": (False, False, False, False, False, True,  False, False),
+        "min_hold_days": 30,
+    },
+
+    # ── 3. 💎 純粹均值回歸（無 MIN 對照）─────────────────────────
+    "💎 純粹均值回歸": {
+        "desc": "【實盤對照】純粹的 b6/s6，無 MIN 限制。WF +4.91% / 延伸 +12.55% / 樣本 1331。作為💎M30的對照組保留，可比較 MIN30 帶來多少額外 alpha。",
+        "buy":  (False, False, False, False, False, True,  False, False, False, False, False),
+        "sell": (False, False, False, False, False, True,  False, False),
+    },
+
+    # ── 4. ⚡ 突破確認（強牛市專用）──────────────────────────────
+    "⚡ 突破確認": {
+        "desc": "【強牛市專用】突破放量+趨勢確認，跌破MA20或放量急跌出。WF +1.21% / 延伸 +7.11%。制度矩陣全能冠軍，6/8 制度正回報。適合趨勢明確時搭配使用。",
+        "buy":  (True,  False, False, False, False, False, False, True,  False, False, False),
+        "sell": (True,  False, False, True,  False, False, False, False),
+    },
+
+    # ── 5. 🔄+ MACD+趨勢MIN30 ───────────────────────────────────
+    "🔄+ MACD+趨勢MIN30": {
+        "desc": "【趨勢市備用】MACD金叉+趨勢確認，MACD死叉出，最少持倉30天。WF +4.80% / 延伸 +4.92%。WF≈延伸，無 bias，數字真實可信。趨勢明確時的穩健選擇。",
+        "buy":  (False, False, False, False, False, False, True,  True,  False, False, False),
+        "sell": (False, False, False, False, False, True,  False, False),
+        "min_hold_days": 30,
+    },
+
+    # ══════════════════════════════════════════════════════════════
+    # 🔬 診斷對照（5 個，用於檢驗 bias 或對照參數）
+    # ══════════════════════════════════════════════════════════════
+
+    # ── 6. 📈 均值回歸（已驗證 BIAS，僅供對照）────────────────────
+    "📈 均值回歸 [BIAS-勿實盤]": {
+        "desc": "【⚠️ 已驗證 Survivorship Bias】WF +10.33% 看似最高，但延伸僅 +3.81% （49.8% 勝率）。原本的高 OOS 數字只統計『跑完全程』的贏家。保留作為 bias 警示對照。",
+        "buy":  (False, False, False, False, True,  True,  False, False, False, False, False),
+        "sell": (False, True,  False, False, True,  False, False, False),
+    },
+
+    # ── 7. 🏗️M30 底部形態MIN30（新發現 BIAS）─────────────────────
+    "🏗️M30 底部形態MIN30 [BIAS-勿實盤]": {
+        "desc": "【⚠️ 新發現 Survivorship Bias】底部突破+MACD金叉，MIN30。WF +6.53% 但延伸僅 +2.19% （49.1% 勝率）。MIN30 強行抓底部假突破。底部形態類不適合 MIN。",
+        "buy":  (False, False, False, True,  False, False, True,  False, False, False, False),
+        "sell": (False, False, False, False, False, True,  False, False),
+        "min_hold_days": 30,
+    },
+
+    # ── 8. ⚡+ 突破確認長持（已知 BIAS）──────────────────────────
+    "⚡+ 突破確認長持MIN30 [BIAS-勿實盤]": {
+        "desc": "【⚠️ Survivorship Bias】b1+b8 + MACD死叉 + MIN30。WF +6.20% / 延伸僅 +3.82%。WF 數字過於樂觀。保留對照。",
+        "buy":  (True,  False, False, False, False, False, False, True,  False, False, False),
+        "sell": (False, False, False, False, False, True,  False, False),
+        "min_hold_days": 30,
+    },
+
+    # ── 9. 💎M20 純粹均值回歸MIN20（MIN 參數對照）────────────────
+    "💎M20 純粹均值回歸MIN20 [對照]": {
+        "desc": "【MIN 參數對照】b6/s6 MIN20。WF +3.52% / 延伸 +16.47% / 樣本 1914。延伸最高但 WF 過於保守，證實 MIN30 才是最優參數。保留作為 MIN 敏感度分析。",
+        "buy":  (False, False, False, False, False, True,  False, False, False, False, False),
+        "sell": (False, False, False, False, False, True,  False, False),
         "min_hold_days": 20,
     },
 
-    # ── 18. 🔄M30 均值回歸長持 MIN30 b5+b6/s6 ────────────────────
-    # 原版 🔄 b5+b6/s6 WF +3.26%，加 MIN30
-    "🔄🔄M30 均值回歸長持MIN30": {
-        "desc": "布林下軌+RSI超賣買入，MACD死叉出場，最少持倉30天。原版🔄 WF +3.26%，加MIN30看是否推高。",
-        "buy":  (False, False, False, False, True,  True,  False, False, False, False),
-        "sell": (False, False, False, False, False, True,  False),
-        "min_hold_days": 30,
-    },
-
-    # ── 19. 🏗️M30 底部形態MIN30 b4+b7/s6 ───────────────────────
-    # 原版 🏗️s6 b4+b7/s6 WF +1.84%，加 MIN30
-    "🏗️M30 底部形態MIN30": {
-        "desc": "底部突破MA20+MACD金叉，MACD死叉出場，最少持倉30天。原版🏗️s6 WF +1.84%（73.4%勝率），加MIN30測試。",
-        "buy":  (False, False, False, True,  False, False, True,  False, False, False),
-        "sell": (False, False, False, False, False, True,  False),
-        "min_hold_days": 30,
-    },
-
-    # ── 20. 🔥M30 趨勢動能MIN30 b1+b8+b9/s6 ─────────────────────
-    # 原版 🔥 b1+b8+b9 WF -0.06% 原生虧損，但延伸+6.76% 顯示有潛力
-    # 加 MIN30 + s6（與 ⚡+ 同出場邏輯）看能否救回來
-    "🔥M30 趨勢動能MIN30": {
-        "desc": "突破+趨勢+52週新高，MACD死叉出場，最少持倉30天。原版🔥 WF-0.06%但延伸+6.76%，加MIN30+s6看能否救回。",
-        "buy":  (True,  False, False, False, False, False, False, True,  True,  False),
-        "sell": (False, False, False, False, False, True,  False),
-        "min_hold_days": 30,
-    },
-
-    # ── 21. 底背離 b3+b8/s6 MIN30 ─────────────────────────────────
-    # b3（底背離）從未進過策略池，最接近價值投資概念
-    "🎪M30 底背離+趨勢MIN30": {
-        "desc": "底背離+趨勢確認，MACD死叉出場，最少持倉30天。b3從未進過策略池，最接近價值投資概念。",
-        "buy":  (False, False, True,  False, False, False, False, True,  False, False),
-        "sell": (False, False, False, False, False, True,  False),
-        "min_hold_days": 30,
+    # ── 10. 🔄基準 純MACD週期（無 MIN 對照）──────────────────────
+    "🔄基準 純MACD週期 [對照]": {
+        "desc": "【MIN 貢獻對照】純 b7/s6 無任何過濾。WF +0.42% / 延伸 +8.80% / 樣本 512。對比🔄M30的+4.60%，可量化 MIN30 帶來的 alpha 約 +4.18%。",
+        "buy":  (False, False, False, False, False, False, True,  False, False, False, False),
+        "sell": (False, False, False, False, False, True,  False, False),
     },
 
     # ══════════════════════════════════════════════════════════════
-    # 🆕 無 MIN 的新組合實驗（測試純進出場邏輯）
+    # 🆕 KDJ 新實驗（4 個，待 WF 驗證）
     # ══════════════════════════════════════════════════════════════
 
-    # ── 22. 雙重均值回歸 b5+b6/s2+s6（無 MIN）─────────────────────
-    # 原版 b5+b6/s2+s5 有 survivorship bias，改成 s2+s6 看是否更紮實
-    "📈🔄 布林RSI雙出（b5+b6/s2+s6）": {
-        "desc": "布林下軌+RSI超賣買入，布林上軌或MACD死叉出場。混合快慢出場策略，對照原版b5+b6/s2+s5（有bias）。",
-        "buy":  (False, False, False, False, True,  True,  False, False, False, False),
-        "sell": (False, True,  False, False, False, True,  False),
-    },
-
-    # ── 23. MACD金叉+突破 b1+b7（無 b8/無 MIN）─────────────────────
-    # 突破且同時 MACD 金叉，雙訊號確認但不要 b8 趨勢過濾
-    "⚡🔄 突破+MACD金叉（b1+b7/s1+s6）": {
-        "desc": "突破放量+MACD金叉買入，破MA20或MACD死叉出場。不要b8趨勢過濾，看純雙訊號確認是否足夠。",
-        "buy":  (True,  False, False, False, False, False, True,  False, False, False),
-        "sell": (True,  False, False, False, False, True,  False),
-    },
-
-    # ── 24. 純 MACD 週期策略 b7/s6（無 MIN）─────────────────────────
-    # 🔄M30 是 +4.60%，看看純無過濾的 b7/s6 原始表現作對照基準
-    "🔄基準 純MACD週期（b7/s6）": {
-        "desc": "純MACD金叉入場，MACD死叉出場。對照🔄M30(+4.60%)的基準，看MIN30到底幫多少。",
-        "buy":  (False, False, False, False, False, False, True,  False, False, False),
-        "sell": (False, False, False, False, False, True,  False),
-    },
-
-    # ── 25. 底部 + 均值回歸 b4+b6/s6 MIN30 ────────────────────────
-    # 結合底部形態與 RSI 超賣，兩種底部訊號重合
-    "🏗️💎M30 底部+超賣MIN30": {
-        "desc": "底部突破MA20+RSI超賣買入，MACD死叉出場，最少持倉30天。兩種底部訊號同時要求，預期樣本少但精度高。",
-        "buy":  (False, False, False, True,  False, True,  False, False, False, False),
-        "sell": (False, False, False, False, False, True,  False),
+    # ── 11. 💎K30 純 KDJ 超賣 MIN30 ──────────────────────────────
+    "💎K30 純KDJ超賣MIN30 [新]": {
+        "desc": "【🆕 新實驗】KDJ超賣金叉(K<20,D<20,K上穿D)買入，MACD死叉出，最少持倉30天。比 b6 (RSI<30) 更嚴格的雙重深度超賣確認。預期樣本較少但精度更高。",
+        "buy":  (False, False, False, False, False, False, False, False, False, False, True),
+        "sell": (False, False, False, False, False, True,  False, False),
         "min_hold_days": 30,
     },
 
+    # ── 12. 💎KK30 RSI+KDJ 雙超賣 MIN30 ──────────────────────────
+    "💎KK30 RSI+KDJ雙超賣MIN30 [新]": {
+        "desc": "【🆕 新實驗】b6 + b11 同時觸發（RSI<30 且 KDJ超賣金叉），MACD死叉出，MIN30。最嚴格的均值回歸進場條件，預期樣本少但精度極高。",
+        "buy":  (False, False, False, False, False, True,  False, False, False, False, True),
+        "sell": (False, False, False, False, False, True,  False, False),
+        "min_hold_days": 30,
+    },
+
+    # ── 13. 💎+ M30 RSI 進 + 雙出場 ──────────────────────────────
+    "💎+ M30 RSI進雙出MIN30 [新]": {
+        "desc": "【🆕 新實驗】b6 (RSI<30) 買入，s6 (MACD死叉) 或 s8 (KDJ高位死叉) 任一觸發出場，MIN30。給冠軍策略💎M30加 KDJ 出場確認，預期更早抓到頂部。",
+        "buy":  (False, False, False, False, False, True,  False, False, False, False, False),
+        "sell": (False, False, False, False, False, True,  False, True),
+        "min_hold_days": 30,
+    },
+
+    # ── 14. 💎K+ M30 雙超賣 + 雙出場 ─────────────────────────────
+    "💎K+ M30 雙超賣雙出MIN30 [新]": {
+        "desc": "【🆕 新實驗】b6+b11 雙超賣進場，s6+s8 雙出場，MIN30。最完整的 KDJ 強化版均值回歸。預期樣本最少但每筆品質最高。",
+        "buy":  (False, False, False, False, False, True,  False, False, False, False, True),
+        "sell": (False, False, False, False, False, True,  False, True),
+        "min_hold_days": 30,
+    },
 
 }
 
@@ -240,15 +146,15 @@ PRESET_CUSTOM = "✏️ 自定義"
 BUY_LABELS = [
     "①突破放量", "②MA5金叉", "③底背離", "④底部突破",
     "⑤布林下軌", "⑥RSI超賣", "⑦MACD金叉", "⑧趨勢確認",
-    "⑨52週新高", "⑩縮量回調",
+    "⑨52週新高", "⑩縮量回調", "⑪KDJ超賣金叉",
 ]
 SELL_LABELS = [
-    "⑪頭部破MA20", "⑫布林上軌", "⑬縮量頂部", "⑭放量急跌",
-    "⑮RSI超買", "⑯MACD死叉", "⑰三日陰線",
+    "⑫頭部破MA20", "⑬布林上軌", "⑭縮量頂部", "⑮放量急跌",
+    "⑯RSI超買", "⑰MACD死叉", "⑱三日陰線", "⑲KDJ高位死叉",
 ]
 
-B_NAMES = ["b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8", "b9", "b10"]
-S_NAMES = ["s1", "s2", "s3", "s4", "s5", "s6", "s7"]
+B_NAMES = ["b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8", "b9", "b10", "b11"]
+S_NAMES = ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"]
 
 # TradingView Screener
 TV_URL = "https://scanner.tradingview.com/hongkong/scan"
