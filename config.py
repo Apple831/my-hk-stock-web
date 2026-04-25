@@ -2,6 +2,11 @@
 # config.py — 策略組合預設 & 全局常量
 # ══════════════════════════════════════════════════════════════════
 #
+# v14 更新（2026-04-25）：
+# • 新增 #15 💎++ M30 趨勢過濾版（b6+b8/s6+s8 MIN30）
+# • 新增 #16 💎+s2 M30 三重出場版（b6/s2+s6+s8 MIN30）
+# • 兩者基於新冠軍 💎+ M30 的進階組合實驗
+#
 # v13 更新（2026-04-25）：
 # • 新增 b11（KDJ超賣金叉）、s8（KDJ高位死叉）兩個訊號
 # • 策略池從 25 個精簡到 14 個：5 實盤 + 5 診斷 + 4 KDJ 新實驗
@@ -103,38 +108,58 @@ STRATEGY_PRESETS = {
     },
 
     # ══════════════════════════════════════════════════════════════
-    # 🆕 KDJ 新實驗（4 個，待 WF 驗證）
+    # 🆕 KDJ 已驗證實驗（4 個，已完成 WF 測試）
     # ══════════════════════════════════════════════════════════════
 
-    # ── 11. 💎K30 純 KDJ 超賣 MIN30 ──────────────────────────────
-    "💎K30 純KDJ超賣MIN30 [新]": {
-        "desc": "【🆕 新實驗】KDJ超賣金叉(K<20,D<20,K上穿D)買入，MACD死叉出，最少持倉30天。比 b6 (RSI<30) 更嚴格的雙重深度超賣確認。預期樣本較少但精度更高。",
+    # ── 11. 💎K30 純 KDJ 超賣 MIN30（已驗證表現平庸）─────────────
+    "💎K30 純KDJ超賣MIN30 [已驗證]": {
+        "desc": "【⚠️ 純 KDJ 失敗】WF +1.50% / 延伸 +10.46% / 樣本 599 / 勝率 58.6%。KDJ 單獨進場效果遠不如 RSI。證實 b6 比 b11 更適合作主進場訊號。",
         "buy":  (False, False, False, False, False, False, False, False, False, False, True),
         "sell": (False, False, False, False, False, True,  False, False),
         "min_hold_days": 30,
     },
 
-    # ── 12. 💎KK30 RSI+KDJ 雙超賣 MIN30 ──────────────────────────
-    "💎KK30 RSI+KDJ雙超賣MIN30 [新]": {
-        "desc": "【🆕 新實驗】b6 + b11 同時觸發（RSI<30 且 KDJ超賣金叉），MACD死叉出，MIN30。最嚴格的均值回歸進場條件，預期樣本少但精度極高。",
+    # ── 12. 💎KK30 RSI+KDJ 雙超賣 MIN30（精選股潛力）─────────────
+    "💎KK30 RSI+KDJ雙超賣MIN30 [精選]": {
+        "desc": "【🎯 精選股策略】WF +5.08% / 延伸 +21.99% / 樣本 133 / 勝率 66.2%。雙重超賣確認，樣本少但延伸極高。可作為「精選股」策略，適合資金有限時挑最佳機會。",
         "buy":  (False, False, False, False, False, True,  False, False, False, False, True),
         "sell": (False, False, False, False, False, True,  False, False),
         "min_hold_days": 30,
     },
 
-    # ── 13. 💎+ M30 RSI 進 + 雙出場 ──────────────────────────────
-    "💎+ M30 RSI進雙出MIN30 [新]": {
-        "desc": "【🆕 新實驗】b6 (RSI<30) 買入，s6 (MACD死叉) 或 s8 (KDJ高位死叉) 任一觸發出場，MIN30。給冠軍策略💎M30加 KDJ 出場確認，預期更早抓到頂部。",
+    # ── 13. 💎+ M30 RSI 進雙出 MIN30（新冠軍候選）────────────────
+    "💎+ M30 RSI進雙出MIN30 [新冠軍]": {
+        "desc": "【🏆 新冠軍候選】b6 進場，s6+s8 雙出場，MIN30。WF +6.80% / 延伸 +15.07% / 樣本 2339 / 勝率 68.6%。比 💎M30 略強（WF +0.24%），s8 加入讓 fold 內表現更好。實盤環境下可能取代 💎M30。",
         "buy":  (False, False, False, False, False, True,  False, False, False, False, False),
         "sell": (False, False, False, False, False, True,  False, True),
         "min_hold_days": 30,
     },
 
-    # ── 14. 💎K+ M30 雙超賣 + 雙出場 ─────────────────────────────
-    "💎K+ M30 雙超賣雙出MIN30 [新]": {
-        "desc": "【🆕 新實驗】b6+b11 雙超賣進場，s6+s8 雙出場，MIN30。最完整的 KDJ 強化版均值回歸。預期樣本最少但每筆品質最高。",
+    # ── 14. 💎K+ M30 雙超賣雙出 MIN30（精選股潛力）───────────────
+    "💎K+ M30 雙超賣雙出MIN30 [精選]": {
+        "desc": "【🎯 精選股策略】WF +5.73% / 延伸 +21.76% / 樣本 133 / 勝率 65.4%。完整 KDJ 強化版均值回歸。樣本與 💎KK30 相同（133），但加 s8 出場略提升 WF。",
         "buy":  (False, False, False, False, False, True,  False, False, False, False, True),
         "sell": (False, False, False, False, False, True,  False, True),
+        "min_hold_days": 30,
+    },
+
+    # ══════════════════════════════════════════════════════════════
+    # 🆕 進階組合實驗（2 個，待 WF 驗證）
+    # ══════════════════════════════════════════════════════════════
+
+    # ── 15. 💎++ M30 趨勢過濾版 b6+b8/s6+s8 MIN30 ────────────────
+    "💎++ M30 趨勢過濾版 [新]": {
+        "desc": "【🆕 新實驗：保守版冠軍候選】b6+b8 進場（RSI超賣 + 個股趨勢確認），s6+s8 雙出場，MIN30。基於新冠軍 💎+ M30 加趨勢過濾，預期樣本減 35-50% 但勝率提升至 72-75%，避免下跌中接刀。",
+        "buy":  (False, False, False, False, False, True,  False, True,  False, False, False),
+        "sell": (False, False, False, False, False, True,  False, True),
+        "min_hold_days": 30,
+    },
+
+    # ── 16. 💎+s2 M30 三重出場版 b6/s2+s6+s8 MIN30 ──────────────
+    "💎+s2 M30 三重出場版 [新]": {
+        "desc": "【🆕 新實驗：進取版冠軍候選】b6 進場，s2+s6+s8 三重出場（布林上軌 + MACD死叉 + KDJ高位死叉），MIN30。預期持倉天數縮短至 35-40 天，WF 可能突破 +7%。風險是可能太早出場錯失大行情。",
+        "buy":  (False, False, False, False, False, True,  False, False, False, False, False),
+        "sell": (False, True,  False, False, False, True,  False, True),
         "min_hold_days": 30,
     },
 
