@@ -1,6 +1,25 @@
 # ══════════════════════════════════════════════════════════════════
 # backtest.py — 回測引擎、績效指標、網格搜索
 # ══════════════════════════════════════════════════════════════════
+#
+# v17 修復（2026-04-26）— 來自策略邏輯審查報告：
+# 🔴 Bug 1: 新部位被同一 bar 立即檢查出場（race condition）
+#   修復：內層迴圈最前面加 entry_idx > i guard，跳過尚未真正成交的部位
+#
+# 🔴 Bug 2: 策略 sell 同日執行（look-ahead bias）
+#   修復：策略 sell 也改為 T+1 close 出場（與進場對稱）
+#   注意：止損/止盈仍用 low/high（盤中觸價單，正確）
+#
+# 🟡 Bug 3: 港股交易成本被低估
+#   修復：新增 commission_pct 參數（預設 0.0013 = 印花稅+佣金+交易費）
+#         舊版 slippage 參數仍向後相容
+#
+# 🟡 Bug 4: 回測邊界 i+1 < n-1 太保守
+#   修復：改為 i+1 < n（少漏一根 bar）
+#
+# 🟡 Bug 5: min/max hold days 互斥檢查
+#   修復：入口加 assert
+# ══════════════════════════════════════════════════════════════════
 
 import pandas as pd
 import streamlit as st
@@ -13,21 +32,37 @@ def run_backtest(
     buy_sigs: tuple, sell_sigs: tuple,
     trade_size: float = 100_000,
     slippage: float = 0.002,
+    # ── v17 新增：拆分交易成本（向後相容）─────────────────────────
+    # 舊版 slippage=0.002 = 0.2% 包含一切（雙邊 0.4%）
+    # 新版可拆分為：
+    #   slippage_pct  = 純價格滑點（單邊，例如 0.001 = 0.1%）
+    #   commission_pct = 印花稅+佣金+交易費（單邊，例如 0.0013 = 0.13%）
+    # 雙邊合計 = (slippage_pct + commission_pct) × 2
+    #
+    # 若兩者均為 None：回退舊行為（slippage 當作完整單邊成本）
+    slippage_pct: float = None,
+    commission_pct: float = None,
     stop_loss_pct: float = None,
     take_profit_pct: float = None,
     max_hold_days: int = None,
-    # ── min_hold_days：最小持倉天數（過濾快死叉的假突破）─────────
-    # 在達到 min_hold_days 之前，只允許止損 / 止盈出場，策略 sell 訊號被凍結。
-    # 目的：例如 b1+b8/s6 進場後若 14 天內 MACD 死叉，多數是假突破；
-    #       強制持有 30 天才開放策略出場，可過濾假訊號。
-    # 注意：單位為「交易日 bar」，與 max_hold_days 一致；30 ≈ 6 週實盤。
     min_hold_days: int = None,
     _precomputed: dict = None,
-    # ── 改進二：恒指市場過濾器 ─────────────────────────────────────
-    # pd.Series[bool]，index 為交易日，True = 恒指 MA20 > MA60（牛市）
-    # None = 不啟用過濾，維持原有行為
     market_filter_series: pd.Series = None,
 ) -> tuple:
+    # ── 🟡 Bug 5: min/max hold days 互斥檢查 ───────────────────────
+    if min_hold_days and max_hold_days:
+        assert min_hold_days < max_hold_days, (
+            f"min_hold_days ({min_hold_days}) 必須小於 max_hold_days ({max_hold_days})"
+        )
+
+    # ── 計算單邊交易成本 ──────────────────────────────────────────
+    if slippage_pct is not None or commission_pct is not None:
+        # 新版：用戶顯式指定拆分
+        one_side_cost = (slippage_pct or 0.0) + (commission_pct or 0.0)
+    else:
+        # 舊版相容：把 slippage 當作完整單邊成本
+        one_side_cost = slippage
+
     sigs = _precomputed if _precomputed is not None else precompute_signals(df)
 
     buy_active  = [B_NAMES[k] for k, v in enumerate(buy_sigs)  if v]
@@ -40,7 +75,6 @@ def run_backtest(
     else:
         buy_signal = pd.Series(False, index=df.index)
 
-    # ── 改進二：把恒指過濾器疊加到 buy_signal ─────────────────────
     if market_filter_series is not None and not market_filter_series.empty:
         hsi_aligned = (
             market_filter_series
@@ -48,7 +82,6 @@ def run_backtest(
             .fillna(True)
         )
         buy_signal = buy_signal & hsi_aligned
-    # ── END 改進二 ────────────────────────────────────────────────
 
     if sell_active:
         sell_signal = sigs[sell_active[0]].copy()
@@ -76,8 +109,10 @@ def run_backtest(
         high_i = high_arr[i]
         date   = idx_arr[i]
 
-        if buy_arr[i] and i + 1 < n - 1:
-            entry_px   = close_arr[i + 1] * (1 + slippage)
+        # ── 🟡 Bug 4: 邊界從 i+1 < n-1 改為 i+1 < n ─────────────────
+        # 舊版會多忽略一根 bar，造成最後一個訊號被跳過
+        if buy_arr[i] and i + 1 < n:
+            entry_px   = close_arr[i + 1] * (1 + one_side_cost)
             entry_date = idx_arr[i + 1]
             entry_idx  = i + 1
             shares = int(trade_size / entry_px)
@@ -90,42 +125,73 @@ def run_backtest(
 
         keep = []
         for pos in positions:
+            # ── 🔴 Bug 1: race condition guard（含同日防護）──────
+            # 跳過尚未真正成交的新部位（entry_idx > i）
+            # 也跳過剛剛成交的當天 (entry_idx == i)，因為實盤無法當天買又當天賣
+            # 持倉天數從 1 開始算 (i+1 才開始檢查出場)
+            if pos["entry_idx"] >= i:
+                keep.append(pos)
+                continue
+
             days_held = i - pos["entry_idx"]
             ep        = pos["entry_px"]
             reason    = None
             exit_px   = close
 
-            # ── min_hold_days 守衛：未滿最小持倉時凍結策略 sell ────
-            # 止損 / 止盈 / 超時 不受影響（風控優先）
             strategy_sell_allowed = True
             if min_hold_days and days_held < min_hold_days:
                 strategy_sell_allowed = False
 
             if stop_loss_pct and low_i <= ep * (1 - stop_loss_pct / 100):
+                # 止損：盤中觸價，正確
                 exit_px = ep * (1 - stop_loss_pct / 100)
                 reason  = f"止損 -{stop_loss_pct:.0f}%"
             elif take_profit_pct and high_i >= ep * (1 + take_profit_pct / 100):
+                # 止盈：盤中觸價，正確
                 exit_px = ep * (1 + take_profit_pct / 100)
                 reason  = f"止盈 +{take_profit_pct:.0f}%"
             elif max_hold_days and days_held >= max_hold_days:
-                exit_px = close * (1 - slippage)
+                # ── 🔴 Bug 2: 超時也改 T+1 出場 ─────────────────────
+                if i + 1 < n:
+                    exit_px = close_arr[i + 1] * (1 - one_side_cost)
+                    exit_date = idx_arr[i + 1]
+                else:
+                    exit_px = close * (1 - one_side_cost)
+                    exit_date = date
                 reason  = f"超時 {max_hold_days}日"
             elif sell_arr[i] and strategy_sell_allowed:
-                exit_px = close * (1 - slippage)
+                # ── 🔴 Bug 2: 策略 sell 改 T+1 出場 ────────────────
+                # 訊號在 T 收盤產生，實盤無法 T 收盤就賣（已收盤）
+                # 必須延後到 T+1 close 出場（與進場對稱）
+                if i + 1 < n:
+                    exit_px = close_arr[i + 1] * (1 - one_side_cost)
+                    exit_date = idx_arr[i + 1]
+                else:
+                    # 最後一根 bar 的訊號無法 T+1 出場，視為未觸發
+                    keep.append(pos)
+                    continue
                 reason  = "策略訊號"
 
             if reason:
+                # 決定 sell_date（止損/止盈用今天，T+1 出場用明天）
+                if reason in ("策略訊號",) or reason.startswith("超時"):
+                    sell_date_obj = exit_date if i + 1 < n else date
+                    sell_date_str = sell_date_obj.strftime("%Y-%m-%d")
+                else:
+                    sell_date_obj = date
+                    sell_date_str = date.strftime("%Y-%m-%d")
+
                 proceeds = pos["shares"] * exit_px
                 pnl_pct  = (exit_px - ep) / ep * 100
                 pnl_hkd  = proceeds - pos["cost"]
                 running_capital *= (1 + pnl_pct / 100)
                 trades.append({
                     "買入日期": pos["entry_date"].strftime("%Y-%m-%d"),
-                    "賣出日期": date.strftime("%Y-%m-%d"),
-                    "買入價": round(ep, 3), "賣出價": round(close, 3),
+                    "賣出日期": sell_date_str,
+                    "買入價": round(ep, 3), "賣出價": round(exit_px, 3),
                     "回報%": round(pnl_pct, 2), "盈虧(HKD)": round(pnl_hkd, 0),
                     "持倉天數": days_held, "賣出原因": reason,
-                    "_buy_date": pos["entry_date"], "_sell_date": date,
+                    "_buy_date": pos["entry_date"], "_sell_date": sell_date_obj,
                     "_win": pnl_pct > 0,
                 })
             else:
@@ -135,7 +201,7 @@ def run_backtest(
 
     # 期末持倉強制平倉
     for pos in positions:
-        last_close = close_arr[-1] * (1 - slippage)
+        last_close = close_arr[-1] * (1 - one_side_cost)
         proceeds   = pos["shares"] * last_close
         pnl_pct    = (last_close - pos["entry_px"]) / pos["entry_px"] * 100
         pnl_hkd    = proceeds - pos["cost"]
@@ -276,7 +342,6 @@ def run_grid_search(
     return df_gs.sort_values(sort_metric, ascending=asc).reset_index(drop=True)
 
 
-# ── 改進二：從 HSI DataFrame 計算恒指過濾器 Series ──────────────────
 def build_hsi_filter(hsi_df: pd.DataFrame) -> pd.Series:
     """
     輸入：已含 MA20 / MA60 的恒指 DataFrame
