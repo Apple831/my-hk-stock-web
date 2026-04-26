@@ -19,6 +19,11 @@
 #
 # 🟡 Bug 5: min/max hold days 互斥檢查
 #   修復：入口加 assert
+#
+# 🔴 Pyramiding 控制（同股冷卻期）
+#   問題：原版連續買訊會無上限累積部位（同一隻股票可能同時持有 5+ 倉）
+#   修復：最近一次進場後 cooldown_days 內凍結新買訊
+#   規則：cooldown_days = min_hold_days（策略級）或預設 30 天
 # ══════════════════════════════════════════════════════════════════
 
 import pandas as pd
@@ -56,12 +61,19 @@ def run_backtest(
         )
 
     # ── 計算單邊交易成本 ──────────────────────────────────────────
-    if slippage_pct is not None or commission_pct is not None:
-        # 新版：用戶顯式指定拆分
-        one_side_cost = (slippage_pct or 0.0) + (commission_pct or 0.0)
+    # 港股實盤單邊約 0.23%（純滑點 0.1% + 手續費合計 0.13%）= 雙邊 0.47%
+    # 預設行為：slippage 參數視為「純滑點」，commission_pct 預設 0.0013
+    # 因此 UI 滑桿值 0.2% 加上 commission 後變成單邊 0.33%（雙邊 0.66%）
+    # 用戶想貼合實盤可把 UI 滑桿降到 0.1%（→ 雙邊 0.46%）
+    # 用戶想關 commission（純比較策略）可顯式傳 commission_pct=0
+    if slippage_pct is not None:
+        # 新版顯式拆分
+        one_side_cost = slippage_pct + (commission_pct if commission_pct is not None else 0.0013)
+    elif commission_pct is not None:
+        one_side_cost = slippage + commission_pct
     else:
-        # 舊版相容：把 slippage 當作完整單邊成本
-        one_side_cost = slippage
+        # 預設：自動疊加 0.13% 手續費以反映實盤
+        one_side_cost = slippage + 0.0013
 
     sigs = _precomputed if _precomputed is not None else precompute_signals(df)
 
@@ -103,6 +115,13 @@ def run_backtest(
     running_capital = trade_size
     daily_equity    = []
 
+    # ── 🔴 Pyramiding 控制（v17 新增）─────────────────────────────
+    # 規則：最近一次進場（含已平倉）後 cooldown_days 內，不允許新買訊
+    # cooldown_days = min_hold_days（若有設）或預設 30 天
+    # 邏輯依據：與 MIN30 一致，30 天內凍結同股加倉
+    cooldown_days = min_hold_days if min_hold_days is not None else 30
+    last_entry_idx = -10000   # 初始遠在過去
+
     for i in range(61, n):
         close  = close_arr[i]
         low_i  = low_arr[i]
@@ -112,16 +131,23 @@ def run_backtest(
         # ── 🟡 Bug 4: 邊界從 i+1 < n-1 改為 i+1 < n ─────────────────
         # 舊版會多忽略一根 bar，造成最後一個訊號被跳過
         if buy_arr[i] and i + 1 < n:
-            entry_px   = close_arr[i + 1] * (1 + one_side_cost)
-            entry_date = idx_arr[i + 1]
-            entry_idx  = i + 1
-            shares = int(trade_size / entry_px)
-            if shares > 0:
-                positions.append({
-                    "shares": shares, "entry_px": entry_px,
-                    "entry_date": entry_date, "entry_idx": entry_idx,
-                    "cost": shares * entry_px,
-                })
+            # ── 🔴 Pyramiding guard ──────────────────────────────
+            # 距上次進場不足冷卻期則跳過
+            days_since_last = i - last_entry_idx
+            if days_since_last < cooldown_days:
+                pass  # 冷卻期內，忽略此買訊
+            else:
+                entry_px   = close_arr[i + 1] * (1 + one_side_cost)
+                entry_date = idx_arr[i + 1]
+                entry_idx  = i + 1
+                shares = int(trade_size / entry_px)
+                if shares > 0:
+                    positions.append({
+                        "shares": shares, "entry_px": entry_px,
+                        "entry_date": entry_date, "entry_idx": entry_idx,
+                        "cost": shares * entry_px,
+                    })
+                    last_entry_idx = entry_idx
 
         keep = []
         for pos in positions:
