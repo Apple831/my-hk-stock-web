@@ -1,4 +1,10 @@
 # tabs/tab_walkforward.py
+#
+# v17 修復（2026-04-26）：
+# • UI 滑桿預設值從 0.20% 改為 0.10%（純滑點）
+#   原因：commission_pct 0.13% 由 backtest.py 自動疊加
+#   合計單邊 0.23%、雙邊 0.46%，貼合港股實盤 ~0.47%
+# • 文案改為「純滑點（不含手續費）」明確化
 import streamlit as st
 from data import get_stock_data
 from indicators import calculate_indicators
@@ -32,6 +38,9 @@ def render(stocks: list):
     | > 65%  | 🔴 嚴重過擬合 |
     | OOS < 0 | 🔴 危險 |
     | N/A    | IS≈0，退化率公式失效，僅看 OOS 數值 |
+
+    > 💡 **v17 更新**：交易成本已改為實盤水準（雙邊 ~0.46%，含 0.13% 手續費自動疊加）。
+    > Pyramiding 控制已啟用：MIN30 期間（或預設 30 日）內同股不再加倉。
     """)
     st.divider()
 
@@ -59,21 +68,23 @@ def render(stocks: list):
         b8  = c2.checkbox("⑧ 趨勢確認",        key="wf_bb8")
         b9  = c2.checkbox("⑨ 52週新高",        key="wf_bb9")
         b10 = c2.checkbox("⑩ 縮量回調",        key="wf_bb10")
-        buy_custom = (b1,b2,b3,b4,b5,b6,b7,b8,b9,b10)
+        b11 = c2.checkbox("⑪ KDJ超賣金叉",     key="wf_bb11")
+        buy_custom = (b1,b2,b3,b4,b5,b6,b7,b8,b9,b10,b11)
 
         st.markdown("#### 🔴 賣出策略（自定義）")
         d1, d2 = st.columns(2)
-        s1 = d1.checkbox("⑪ 頭部跌破MA20", key="wf_bs1")
-        s2 = d1.checkbox("⑫ 布林上軌",     key="wf_bs2")
-        s3 = d1.checkbox("⑬ 上漲縮量",     key="wf_bs3")
-        s4 = d1.checkbox("⑭ 放量急跌",     key="wf_bs4")
-        s5 = d2.checkbox("⑮ RSI超買",      key="wf_bs5")
-        s6 = d2.checkbox("⑯ MACD死叉",     key="wf_bs6")
-        s7 = d2.checkbox("⑰ 三日陰線",     key="wf_bs7")
-        sell_custom = (s1,s2,s3,s4,s5,s6,s7)
+        s1 = d1.checkbox("⑫ 頭部跌破MA20", key="wf_bs1")
+        s2 = d1.checkbox("⑬ 布林上軌",     key="wf_bs2")
+        s3 = d1.checkbox("⑭ 上漲縮量",     key="wf_bs3")
+        s4 = d1.checkbox("⑮ 放量急跌",     key="wf_bs4")
+        s5 = d2.checkbox("⑯ RSI超買",      key="wf_bs5")
+        s6 = d2.checkbox("⑰ MACD死叉",     key="wf_bs6")
+        s7 = d2.checkbox("⑱ 三日陰線",     key="wf_bs7")
+        s8 = d2.checkbox("⑲ KDJ高位死叉",  key="wf_bs8")
+        sell_custom = (s1,s2,s3,s4,s5,s6,s7,s8)
     else:
-        buy_custom  = (False,)*10
-        sell_custom = (False,)*7
+        buy_custom  = (False,)*11
+        sell_custom = (False,)*8
 
     buy_sigs, sell_sigs = get_preset_sigs(_preset, buy_custom, sell_custom)
 
@@ -82,7 +93,7 @@ def render(stocks: list):
     if preset_min_hold:
         st.info(
             f"🔒 此策略已啟用 **min_hold_days = {preset_min_hold} 交易日**"
-            f"（進場後 {preset_min_hold} 個 bar 內凍結策略 sell，只允許止損/止盈出場）"
+            f"（進場後 {preset_min_hold} 個 bar 內凍結策略 sell；同股 {preset_min_hold} 日內不再加倉）"
         )
 
     # ══════════════════════════════════════════════════════════════
@@ -98,7 +109,7 @@ def render(stocks: list):
             value=False, key="wf_hsi_filter",
             help=(
                 "只有在恒指本身處於上升趨勢（MA20 > MA60）時才觸發買入。\n"
-                "目標：過濾橫盤 / 熊市環境的假訊號（如 F3 2023-04~10）。\n"
+                "目標：過濾橫盤 / 熊市環境的假訊號。\n"
                 "代價：訊號頻率會降低，部分 Fold 交易數可能不足門檻。"
             ),
         )
@@ -113,7 +124,7 @@ def render(stocks: list):
             ),
         )
 
-    extra_buy = (False,False,False,False,False,False,False,use_b8_filter,False,False)
+    extra_buy = (False,False,False,False,False,False,False,use_b8_filter,False,False,False)
 
     if use_hsi_filter or use_b8_filter:
         active_filters = []
@@ -136,7 +147,12 @@ def render(stocks: list):
                 wf_oos_months = st.slider("Out-of-Sample 窗口（月）", 1, 12, 3, 1, key="wf_oos_months")
             with c2:
                 wf_capital  = st.number_input("每筆交易金額 (HKD)", value=100_000, step=10_000, min_value=10_000, key="wf_capital")
-                wf_slippage = st.slider("滑點 (%)", 0.0, 1.0, 0.20, 0.05, key="wf_slippage") / 100
+                # 🟡 Bug 1: 滑桿從 0.20% 改為 0.10%（純滑點），commission 0.13% 由 backtest 自動加
+                wf_slippage = st.slider(
+                    "純滑點 % (不含手續費)", 0.0, 1.0, 0.10, 0.05, key="wf_slippage",
+                    help="這只是純價格滑點，0.13% 手續費（印花稅+佣金+交易費）會自動疊加。"
+                         "預設 0.10% + 0.13% = 單邊 0.23% / 雙邊 0.46%（貼合港股實盤）",
+                ) / 100
                 wf_sl       = st.number_input("止損 %（0=不啟用）", value=0.0, step=1.0, min_value=0.0, max_value=50.0, key="wf_sl")
                 wf_tp       = st.number_input("止盈 %（0=不啟用）", value=0.0, step=5.0, min_value=0.0, max_value=200.0, key="wf_tp")
                 wf_maxdays  = st.number_input("最長持倉天數（0=不限）", value=0, step=5, min_value=0, key="wf_maxdays")
@@ -144,7 +160,7 @@ def render(stocks: list):
 
             total_m   = {"3y":36,"5y":60,"10y":120}[wf_period]
             est_folds = max(0, (total_m - wf_is_months) // wf_oos_months)
-            st.info(f"📋 預計約 **{est_folds} 個 Fold**")
+            st.info(f"📋 預計約 **{est_folds} 個 Fold**　｜　預計成本：單邊 {(wf_slippage*100 + 0.13):.2f}% / 雙邊 {(wf_slippage*100 + 0.13)*2:.2f}%")
 
         sl_v = wf_sl    if wf_sl    > 0 else None
         tp_v = wf_tp    if wf_tp    > 0 else None
@@ -231,7 +247,11 @@ def render(stocks: list):
                 wf_port_min    = st.number_input("每 Fold 最低有效 OOS 交易數", value=5, min_value=1, max_value=50, step=1, key="wf_port_min")
             with c2:
                 wf_port_capital = st.number_input("每筆交易金額 (HKD)", value=100_000, step=10_000, min_value=10_000, key="wf_port_capital")
-                wf_port_slip    = st.slider("滑點 (%)", 0.0, 1.0, 0.20, 0.05, key="wf_port_slip") / 100
+                # 🟡 Bug 1: 滑桿從 0.20% 改為 0.10%
+                wf_port_slip    = st.slider(
+                    "純滑點 % (不含手續費)", 0.0, 1.0, 0.10, 0.05, key="wf_port_slip",
+                    help="0.13% 手續費自動疊加。預設 0.10% + 0.13% = 單邊 0.23% / 雙邊 0.46%",
+                ) / 100
                 wf_port_sl      = st.number_input("止損 %（0=不啟用）", value=0.0, step=1.0, min_value=0.0, max_value=50.0, key="wf_port_sl")
                 wf_port_tp      = st.number_input("止盈 %（0=不啟用）", value=0.0, step=5.0, min_value=0.0, max_value=200.0, key="wf_port_tp")
                 wf_port_maxdays = st.number_input("最長持倉天數（0=不限）", value=0, step=5, min_value=0, key="wf_port_maxdays")
@@ -240,7 +260,7 @@ def render(stocks: list):
             est_folds_p = max(0, (total_m_p - wf_port_is) // wf_port_oos)
             st.info(
                 f"📋 預計約 **{est_folds_p} 個 Fold** × {n_sel} 隻股票　｜　"
-                f"預計每 Fold OOS：{n_sel} 隻 × 約 2 筆 ≈ **{n_sel * 2} 筆**（視策略而定）"
+                f"預計成本：單邊 {(wf_port_slip*100 + 0.13):.2f}% / 雙邊 {(wf_port_slip*100 + 0.13)*2:.2f}%"
             )
 
         sl_pv = wf_port_sl     if wf_port_sl     > 0 else None
@@ -305,14 +325,17 @@ def render(stocks: list):
         st.markdown("""
         **退化率公式**：`(IS均回報 − OOS均回報) / |IS均回報| × 100%`
 
-        **N/A**：IS 均回報 < 0.5% 時，退化率公式因分母趨近零而失效，顯示 N/A。此時只看 OOS 數值本身。
+        **N/A**：IS 均回報 < 0.5% 時，退化率公式因分母趨近零而失效，顯示 N/A。
 
-        **改進二（恒指過濾）的作用**：只在恒指 MA20 > MA60 的日子允許入場，過濾橫盤/熊市假訊號。
-        預期效果：F3（2023年橫盤）虧損收窄或消失；代價是部分有效 Fold 的交易數會減少。
+        **改進二（恒指過濾）**：只在恒指 MA20 > MA60 的日子允許入場。
 
-        **改進三（b8 個股趨勢確認）的作用**：額外要求個股本身在上升趨勢才入場。
+        **改進三（b8 個股趨勢確認）**：額外要求個股本身在上升趨勢才入場。
 
-        **min_hold_days（MIN30 等策略）的作用**：進場後若干個交易日內凍結策略 sell 訊號，
-        只允許止損/止盈出場。用來過濾快死叉的假突破，例如 b1+b8/s6 原版 WF -0.70%
-        但延伸追蹤 +5.72%，差異主要來自 14 天內 MACD 假死叉。
+        **min_hold_days**：進場後若干個交易日內凍結策略 sell 訊號（止損/止盈仍啟用）。
+
+        **v17 修復重點**：
+        - 🔴 race condition：新部位被同 bar 立即出場檢查 → 已修
+        - 🔴 look-ahead bias：策略 sell 同日 close 出場 → 改為 T+1 close
+        - 🔴 pyramiding：同股無限累積部位 → 限制 MIN30 期間（或預設 30 日）只能 1 倉
+        - 🟡 交易成本：自動疊加 0.13% 手續費 → 雙邊 ~0.46% 貼合實盤
         """)
