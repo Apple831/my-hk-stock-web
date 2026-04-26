@@ -1,4 +1,11 @@
 # tabs/tab_buy_scan.py
+#
+# v17 修復（2026-04-26）:
+# 🔴 Bug 4: hsi_bullish 已是 dead param 但 UI 文案仍顯示「b5/b6 已過濾」
+#   修復：明確告訴用戶 b5/b6 不會自動過濾，建議手動勾選 b8 趨勢確認
+#
+# 🟡 補充：勾選介面新增 b11 / s8（與 indicators / signals 對應）
+
 import streamlit as st
 import pandas as pd
 from data import get_stock_data, get_cached
@@ -22,27 +29,29 @@ def render(stocks: list):
         b2  = col_a.checkbox("② MA5 金叉 MA20",                help="5日均線今日上穿20日均線（趨勢轉強）")
         b3  = col_a.checkbox("③ 底背離（價創新低 MACD未）",     help="swing low 背離：價格新低但 DIF 未新低，RSI < 40")
         b4  = col_a.checkbox("④ 底部形態突破（放量站上MA20）",  help="近期均線低位，今日放量站上 MA20，底部確認")
-        b5  = col_a.checkbox("⑤ 布林帶下軌買入（牛市過濾）",    help="收盤跌穿布林下軌。注意：熊市自動停用，避免接刀")
-        b6  = col_b.checkbox("⑥ RSI 超賣（< 30，牛市過濾）",   help="RSI 低於 30。注意：熊市自動停用")
+        b5  = col_a.checkbox("⑤ 布林帶下軌買入",                help="收盤跌穿布林下軌。⚠️ 不會自動過濾熊市，建議搭配 b8 使用")
+        b6  = col_b.checkbox("⑥ RSI 超賣（< 30）",             help="RSI 低於 30。⚠️ 不會自動過濾熊市，建議搭配 b8 使用")
         b7  = col_b.checkbox("⑦ MACD 金叉（DIF上穿DEA）",      help="DIF 今日上穿 DEA，動能由弱轉強，中線入場訊號")
         b8  = col_b.checkbox("⑧ 個股趨勢確認（MA20 > MA60）",  help="【推薦常開】確保個股本身在上升趨勢")
         b9  = col_b.checkbox("⑨ 52週新高突破",                  help="【動能策略】接近或突破52週高點，強者恆強")
         b10 = col_b.checkbox("⑩ 縮量回調至 MA20",              help="【低風險入場】上升趨勢中回調至MA20附近且成交量萎縮")
-        buy_custom = (b1,b2,b3,b4,b5,b6,b7,b8,b9,b10)
+        b11 = col_b.checkbox("⑪ KDJ 超賣金叉",                  help="K<20, D<20 且 K 上穿 D，深度超賣訊號")
+        buy_custom = (b1,b2,b3,b4,b5,b6,b7,b8,b9,b10,b11)
 
         st.caption("🔴 賣出策略（可額外勾選，不選則只靠止損出場）")
         col_sa, col_sb = st.columns(2)
-        s1 = col_sa.checkbox("⑪ 頭部跌破 MA20（放量）",  key="t2_s1")
-        s2 = col_sa.checkbox("⑫ 布林帶上軌賣出",          key="t2_s2")
-        s3 = col_sa.checkbox("⑬ 上漲縮量警惕頂部",        key="t2_s3")
-        s4 = col_sa.checkbox("⑭ 放量急跌",                key="t2_s4")
-        s5 = col_sb.checkbox("⑮ RSI 超買（> 70）",        key="t2_s5")
-        s6 = col_sb.checkbox("⑯ MACD 死叉",               key="t2_s6")
-        s7 = col_sb.checkbox("⑰ 三日陰線 + 跌破MA20",     key="t2_s7")
-        sell_custom = (s1,s2,s3,s4,s5,s6,s7)
+        s1 = col_sa.checkbox("⑫ 頭部跌破 MA20（放量）",  key="t2_s1")
+        s2 = col_sa.checkbox("⑬ 布林帶上軌賣出",          key="t2_s2")
+        s3 = col_sa.checkbox("⑭ 上漲縮量警惕頂部",        key="t2_s3")
+        s4 = col_sa.checkbox("⑮ 放量急跌",                key="t2_s4")
+        s5 = col_sb.checkbox("⑯ RSI 超買（> 70）",        key="t2_s5")
+        s6 = col_sb.checkbox("⑰ MACD 死叉",               key="t2_s6")
+        s7 = col_sb.checkbox("⑱ 三日陰線 + 跌破MA20",     key="t2_s7")
+        s8 = col_sb.checkbox("⑲ KDJ 高位死叉",            key="t2_s8")
+        sell_custom = (s1,s2,s3,s4,s5,s6,s7,s8)
     else:
-        buy_custom  = (False,)*10
-        sell_custom = (False,)*7
+        buy_custom  = (False,)*11
+        sell_custom = (False,)*8
 
     buy_sigs, _ = get_preset_sigs(_preset, buy_custom, sell_custom)
 
@@ -69,6 +78,7 @@ def render(stocks: list):
             if df.empty or len(df) < 62:
                 continue
             try:
+                # hsi_bullish 已是 dead param，傳入只為向後相容
                 pre = precompute_signals(df, hsi_bullish=hsi_bull)
                 n_hit = 0
                 all_hit = True
@@ -106,7 +116,13 @@ def render(stocks: list):
             results.sort(key=lambda x: x["評分"], reverse=True)
             if top_n_buy > 0:
                 results = results[:int(top_n_buy)]
-            hsi_label = "🟢 多頭" if hsi_bull else "🔴 空頭（b5/b6 布林/RSI 已過濾）"
+
+            # ── 🔴 Bug 4 修復：文案改為提醒用戶手動過濾 ─────────────
+            if hsi_bull:
+                hsi_label = "🟢 多頭"
+            else:
+                hsi_label = "🔴 空頭（提醒：b5/b6 不會自動過濾，建議手動勾選 ⑧ 個股趨勢確認）"
+
             st.success(f"✅ 發現 {len(results)} 個買入標的　｜　恆指趨勢：{hsi_label}")
             show_scan_metrics(results)
             st.divider()
