@@ -1,10 +1,10 @@
 # ══════════════════════════════════════════════════════════════════
-# app.py — 港股狙擊手 V12.0 主入口
+# app.py — 港股狙擊手 V17.0 主入口
 # ══════════════════════════════════════════════════════════════════
 import streamlit as st
 from datetime import datetime
 
-st.set_page_config(page_title="港股狙擊手 V12.0", layout="wide")
+st.set_page_config(page_title="港股狙擊手 V17.0", layout="wide")
 
 from data import (
     load_stocks, load_stocks_from_file,
@@ -93,7 +93,7 @@ with st.sidebar:
 # Main UI — Tab routing
 # ══════════════════════════════════════════════════════════════════
 STOCKS = load_stocks()
-st.title("🏹 港股狙擊手 V12.0")
+st.title("🏹 港股狙擊手 V17.0")
 
 tabs = st.tabs([
     "🌍 指數", "🏆 跑贏大市", "🟢 買入掃描", "🔴 賣出掃描",
